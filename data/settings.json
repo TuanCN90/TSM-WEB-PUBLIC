@@ -1,0 +1,12 @@
+{
+  "maxSessions": 15,
+  "defaultTransport": "socket",
+  "speed": 1,
+  "logLevel": "debug",
+  "commandTimeoutMs": 60000,
+  "heartbeatMs": 12000,
+  "autoReconnect": true,
+  "maxReconnect": 1,
+  "socketCodec": "ts-online",
+  "autoCheckin": true
+}

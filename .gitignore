@@ -1,0 +1,15 @@
+node_modules
+dist
+data/logs
+.DS_Store
+.nuget
+
+# BẢO MẬT: Tuyệt đối không commit dữ liệu tài khoản & cấu hình cá nhân lên repo
+data/accounts.json
+data/battle-configs.json
+data/chase-configs.json
+data/dungeon-solo-configs.json
+data/dungeon-team-configs.json
+data/item-lists.json
+data/last-closed.json
+data/party-configs.json

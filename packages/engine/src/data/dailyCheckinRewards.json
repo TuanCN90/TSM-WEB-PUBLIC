@@ -1,0 +1,204 @@
+{
+  "daily": {
+    "1": {
+      "day": 1,
+      "itemId": 46029,
+      "qty": 3,
+      "name": "Hạo Giác"
+    },
+    "2": {
+      "day": 2,
+      "itemId": 65352,
+      "qty": 15,
+      "name": "Đồng"
+    },
+    "3": {
+      "day": 3,
+      "itemId": 45607,
+      "qty": 5,
+      "name": "Túi Lông Cấp 1"
+    },
+    "4": {
+      "day": 4,
+      "itemId": 65412,
+      "qty": 100,
+      "name": "Trang Bị Phiến"
+    },
+    "5": {
+      "day": 5,
+      "itemId": 45611,
+      "qty": 10,
+      "name": "Túi EXP Tướng"
+    },
+    "6": {
+      "day": 6,
+      "itemId": 65411,
+      "qty": 2000,
+      "name": "Võ Tướng Phiến"
+    },
+    "7": {
+      "day": 7,
+      "itemId": 65415,
+      "qty": 1,
+      "name": "Phiếu Rút Võ Tướng"
+    },
+    "8": {
+      "day": 8,
+      "itemId": 46038,
+      "qty": 30,
+      "name": "Đại Phúc Thần"
+    },
+    "9": {
+      "day": 9,
+      "itemId": 65353,
+      "qty": 2,
+      "name": "Đồng"
+    },
+    "10": {
+      "day": 10,
+      "itemId": 45613,
+      "qty": 5,
+      "name": "Túi Linh Thạch"
+    },
+    "11": {
+      "day": 11,
+      "itemId": 45610,
+      "qty": 5,
+      "name": "Túi Ngộ Tính Đan"
+    },
+    "12": {
+      "day": 12,
+      "itemId": 45611,
+      "qty": 20,
+      "name": "Túi EXP Tướng"
+    },
+    "13": {
+      "day": 13,
+      "itemId": 45612,
+      "qty": 10,
+      "name": "Túi Tọa Kỵ Đan"
+    },
+    "14": {
+      "day": 14,
+      "itemId": 65416,
+      "qty": 1,
+      "name": "Phiếu Rút Thẻ"
+    },
+    "15": {
+      "day": 15,
+      "itemId": 46029,
+      "qty": 3,
+      "name": "Hạo Giác"
+    },
+    "16": {
+      "day": 16,
+      "itemId": 65353,
+      "qty": 3,
+      "name": "Đồng"
+    },
+    "17": {
+      "day": 17,
+      "itemId": 45607,
+      "qty": 10,
+      "name": "Túi Lông Cấp 1"
+    },
+    "18": {
+      "day": 18,
+      "itemId": 65412,
+      "qty": 200,
+      "name": "Trang Bị Phiến"
+    },
+    "19": {
+      "day": 19,
+      "itemId": 45611,
+      "qty": 30,
+      "name": "Túi EXP Tướng"
+    },
+    "20": {
+      "day": 20,
+      "itemId": 65411,
+      "qty": 4000,
+      "name": "Võ Tướng Phiến"
+    },
+    "21": {
+      "day": 21,
+      "itemId": 65415,
+      "qty": 2,
+      "name": "Phiếu Rút Võ Tướng"
+    },
+    "22": {
+      "day": 22,
+      "itemId": 46038,
+      "qty": 50,
+      "name": "Đại Phúc Thần"
+    },
+    "23": {
+      "day": 23,
+      "itemId": 65353,
+      "qty": 5,
+      "name": "Đồng"
+    },
+    "24": {
+      "day": 24,
+      "itemId": 45613,
+      "qty": 10,
+      "name": "Túi Linh Thạch"
+    },
+    "25": {
+      "day": 25,
+      "itemId": 45610,
+      "qty": 10,
+      "name": "Túi Ngộ Tính Đan"
+    },
+    "26": {
+      "day": 26,
+      "itemId": 45611,
+      "qty": 40,
+      "name": "Túi EXP Tướng"
+    },
+    "27": {
+      "day": 27,
+      "itemId": 45612,
+      "qty": 20,
+      "name": "Túi Tọa Kỵ Đan"
+    },
+    "28": {
+      "day": 28,
+      "itemId": 65416,
+      "qty": 2,
+      "name": "Phiếu Rút Thẻ"
+    }
+  },
+  "streak": {
+    "5": {
+      "day": 5,
+      "itemId": 65304,
+      "qty": 1,
+      "name": "Vàng"
+    },
+    "10": {
+      "day": 10,
+      "itemId": 65307,
+      "qty": 1,
+      "name": "Vàng"
+    },
+    "15": {
+      "day": 15,
+      "itemId": 65307,
+      "qty": 2,
+      "name": "Vàng"
+    },
+    "20": {
+      "day": 20,
+      "itemId": 65307,
+      "qty": 3,
+      "name": "Vàng"
+    },
+    "25": {
+      "day": 25,
+      "itemId": 65301,
+      "qty": 350,
+      "name": "Vàng"
+    }
+  }
+}

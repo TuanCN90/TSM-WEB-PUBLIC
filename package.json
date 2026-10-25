@@ -1,0 +1,30 @@
+{
+  "name": "ts-bot-web",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @tsbot/server\" \"npm run dev -w @tsbot/web\"",
+    "dev:server": "npm run dev -w @tsbot/server",
+    "dev:web": "npm run dev -w @tsbot/web",
+    "build": "npm run build -w @tsbot/web",
+    "start": "npm run build && npm run start -w @tsbot/server",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/server --noEmit && tsc -p apps/web --noEmit",
+    "import-scripts": "tsx tools/import-scripts.ts",
+    "import-maps": "tsx tools/import-map-names.ts",
+    "import-npcs": "tsx tools/import-npc-names.ts",
+    "import-items": "tsx tools/import-item-names.ts && tsx tools/import-item-details.ts",
+    "import-warp": "tsx tools/import-warp-gates.ts",
+    "import-doors": "tsx tools/import-doors.ts",
+    "pcap": "tsx tools/pcap-decode.ts",
+    "import-exp": "tsx tools/import-exp-table.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
