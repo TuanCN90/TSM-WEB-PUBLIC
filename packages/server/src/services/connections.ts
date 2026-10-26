@@ -2,8 +2,10 @@ import { EngineError, GameConnection, getDriver } from "@tsbot/engine";
 import type { ActionParams, ActionResult, CharacterState, ConnectionInfo, LogEntry, LoginBody, ScriptControl } from "@tsbot/protocol";
 import { DungeonSoloService } from "./dungeonSolo";
 import { DungeonTeamService } from "./dungeonTeam";
+import { WorldBossService } from "./worldBoss";
+import { EscortService } from "./escort";
 import { PartyService, WARP_ACTIONS } from "./party";
-import { CUSTOM_PREFIX, ClosedStore, DungeonSoloConfigStore, DungeonTeamConfigStore, PartyConfigStore, type AccountStore, type BattleConfigStore, type ItemListStore, type RunnableRegistry, type ScriptStore, type ServerStore, type SettingsStore } from "./store";
+import { CUSTOM_PREFIX, ClosedStore, DailyChecklistStore, DungeonSoloConfigStore, DungeonTeamConfigStore, EscortConfigStore, PartyConfigStore, WorldBossConfigStore, type AccountStore, type BattleConfigStore, type ItemListStore, type RunnableRegistry, type ScriptStore, type ServerStore, type SettingsStore } from "./store";
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -31,11 +33,33 @@ export class ConnectionManager {
     { entries: () => [...this.conns.entries()], pushCharacter: (id) => this.pushCharacter(id) },
     this.dungeonTeamConfigs,
   );
+  /** Danh sách nhiệm vụ ngày Daily Checklist (reset 00:00 TW). */
+  readonly dailyChecklist = new DailyChecklistStore();
   /** Phó bản đơn (xem services/dungeonSolo.ts + docs/DUNGEON_SOLO_KNOWLEDGE.md). */
   readonly dungeonSoloConfigs = new DungeonSoloConfigStore();
   readonly dungeonSolo = new DungeonSoloService(
     { entries: () => [...this.conns.entries()], pushCharacter: (id) => this.pushCharacter(id) },
     this.dungeonSoloConfigs,
+    this.dailyChecklist,
+    (id) => this.party.refresh(id),
+  );
+  /** Săn Boss Thế Giới (xem services/worldBoss.ts). */
+  readonly worldBossConfigs = new WorldBossConfigStore();
+  readonly worldBoss = new WorldBossService(
+    { entries: () => [...this.conns.entries()], pushCharacter: (id) => this.pushCharacter(id) },
+    this.worldBossConfigs,
+    this.dailyChecklist,
+  );
+  /** Tự động Vận Tiêu & Nhà Trọ (xem services/escort.ts). */
+  readonly escortConfigs = new EscortConfigStore();
+  readonly escort = new EscortService(
+    {
+      entries: () => [...this.conns.entries()],
+      get: (id) => this.conns.get(id),
+      pushCharacter: (id) => this.pushCharacter(id),
+    },
+    this.escortConfigs,
+    this.dailyChecklist,
   );
 
   constructor(
@@ -68,8 +92,10 @@ export class ConnectionManager {
     const plan = this.party.planFor(accountId);
     const dungeonTeam = this.dungeonTeam.stateFor(accountId);
     const dungeonSolo = this.dungeonSolo.stateFor(accountId);
-    if (plan === ch.partyPlan && dungeonTeam === ch.dungeonTeam && dungeonSolo === ch.dungeonSolo) return ch;
-    return { ...ch, partyPlan: plan, dungeonTeam, dungeonSolo };
+    const worldBoss = this.worldBoss.stateFor(accountId);
+    const dailyChecklist = this.dailyChecklist.get(accountId);
+    if (plan === ch.partyPlan && dungeonTeam === ch.dungeonTeam && dungeonSolo === ch.dungeonSolo && worldBoss === ch.worldBoss && dailyChecklist === ch.dailyChecklist) return ch;
+    return { ...ch, partyPlan: plan, dungeonTeam, dungeonSolo, worldBoss, dailyChecklist };
   }
 
   /** PartyService đổi kế hoạch ⇒ đẩy lại state ngay (không chờ nhịp đồng bộ 3s). */
@@ -210,19 +236,43 @@ export class ConnectionManager {
   private async autoCheckin(accountId: string, c: GameConnection) {
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     await sleep(4000);
+    let checkinOk = false;
     for (let i = 0; i < 4; i++) {
       if (c.isOffline) return;
       try {
         const r = await c.dispatch("daily_checkin", undefined, { quiet: true });
-        if (r.ok) return;
-        if (!/chưa đọc được bộ đếm/.test(r.message ?? "")) { c.log("info", `📅 [Điểm danh tự động] ${r.message ?? "không thực hiện được"}`, "game"); return; }
+        if (r.ok) {
+          checkinOk = true;
+          this.dailyChecklist?.recordProgress(accountId, "checkin", 1);
+          this.pushCharacter?.(accountId);
+          break;
+        }
+        if (!/chưa đọc được bộ đếm/.test(r.message ?? "")) { c.log("info", `📅 [Điểm danh tự động] ${r.message ?? "không thực hiện được"}`, "game"); break; }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (!/chưa đọc được bộ đếm/.test(msg)) { c.log("info", `📅 [Điểm danh tự động] ${msg}`, "game"); return; }
+        if (!/chưa đọc được bộ đếm/.test(msg)) { c.log("info", `📅 [Điểm danh tự động] ${msg}`, "game"); break; }
       }
       await sleep(3000);
     }
-    c.log("warn", "📅 [Điểm danh tự động] chưa đọc được bộ đếm ngày từ server — bấm nút 📅 để điểm danh tay", "game");
+    if (!checkinOk) {
+      c.log("warn", "📅 [Điểm danh tự động] chưa đọc được bộ đếm ngày từ server — bấm nút 📅 để điểm danh tay", "game");
+    }
+
+    // Tự động tặng quà bạn bè nếu trong ngày chưa tặng
+    try {
+      if (!c.isOffline && this.dailyChecklist) {
+        const cl = this.dailyChecklist.get(accountId);
+        const item = cl?.items?.["gift_friend"];
+        if (!item || !item.done) {
+          await sleep(1000);
+          const r = await c.dispatch("friend_gift_all", undefined, { quiet: true });
+          if (r.ok) {
+            this.dailyChecklist.recordProgress(accountId, "gift_friend", 1);
+            this.pushCharacter?.(accountId);
+          }
+        }
+      }
+    } catch {}
   }
 
   async logout(accountId: string): Promise<ConnectionInfo> {
@@ -231,11 +281,28 @@ export class ConnectionManager {
     return c.info();
   }
 
-  dispatch(accountId: string, action: string, params?: ActionParams): Promise<ActionResult> {
+  async dispatch(accountId: string, action: string, params?: ActionParams): Promise<ActionResult> {
     const conn = this.get(accountId);
     // Chủ PT warp ⇒ thành viên trong đội warp theo (chạy song song); chuỗi warp của chủ tự chờ đủ đội ở bước {gather}.
     if (WARP_ACTIONS.has(action)) this.party.mirrorWarp(accountId, action, params);
-    return conn.dispatch(action, params);
+    const res = await conn.dispatch(action, params);
+    if (res.ok) {
+      if (action === "friend_gift_all" || action === "friend_send_gift") {
+        this.dailyChecklist?.recordProgress(accountId, "gift_friend", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "pull_secret") {
+        this.dailyChecklist?.recordProgress(accountId, "pull_secret", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "pull_card") {
+        this.dailyChecklist?.recordProgress(accountId, "pull_card", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "pull_all") {
+        this.dailyChecklist?.recordProgress(accountId, "pull_secret", 1);
+        this.dailyChecklist?.recordProgress(accountId, "pull_card", 1);
+        this.pushCharacter?.(accountId);
+      }
+    }
+    return res;
   }
 
   private resolveScript(scriptId: string) {

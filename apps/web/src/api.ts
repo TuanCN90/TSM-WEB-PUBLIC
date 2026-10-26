@@ -73,6 +73,27 @@ export const api = {
     req<import("@tsbot/protocol").DungeonSoloConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/dungeon-solo-config`, config),
   dungeonSoloAction: (accountId: string, action: "start" | "stop" | "exit") =>
     req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/dungeon-solo/${action}`),
+  dungeonSoloBuy: (accountId: string, dungeonId?: number) =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/dungeon-solo/buy`, { dungeonId }),
+  worldBossConfig: (accountId: string) => req<import("@tsbot/protocol").WorldBossConfig>("GET", `/api/accounts/${encodeURIComponent(accountId)}/world-boss-config`),
+  saveWorldBossConfig: (accountId: string, config: Partial<import("@tsbot/protocol").WorldBossConfig>) =>
+    req<import("@tsbot/protocol").WorldBossConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/world-boss-config`, config),
+  worldBossAction: (accountId: string, action: "start" | "stop") =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/world-boss/${action}`),
+  dailyChecklist: (accountId: string) => req<import("@tsbot/protocol").DailyChecklistState>("GET", `/api/accounts/${encodeURIComponent(accountId)}/daily-checklist`),
+  dailyChecklistToggle: (accountId: string, key: string) =>
+    req<import("@tsbot/protocol").DailyChecklistState>("POST", `/api/accounts/${encodeURIComponent(accountId)}/daily-checklist/toggle`, { key }),
+  dailyChecklistProgress: (accountId: string, key: string, count?: number) =>
+    req<import("@tsbot/protocol").DailyChecklistState>("POST", `/api/accounts/${encodeURIComponent(accountId)}/daily-checklist/progress`, { key, count }),
+  friendGift: (accountId: string) =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/friend-gift`),
+  escortConfig: (accountId: string) => req<import("@tsbot/protocol").EscortConfig>("GET", `/api/accounts/${encodeURIComponent(accountId)}/escort-config`),
+  saveEscortConfig: (accountId: string, config: Partial<import("@tsbot/protocol").EscortConfig>) =>
+    req<import("@tsbot/protocol").EscortConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/escort-config`, config),
+  escortRun: (accountId: string) =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/escort/run`),
+  openInn: (accountId: string) =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/open-inn`),
   chaseConfig: (accountId: string) => req<import("@tsbot/protocol").ChaseConfig>("GET", `/api/accounts/${encodeURIComponent(accountId)}/chase-config`),
   saveChaseConfig: (accountId: string, config: Partial<import("@tsbot/protocol").ChaseConfig>) =>
     req<import("@tsbot/protocol").ChaseConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/chase-config`, config),

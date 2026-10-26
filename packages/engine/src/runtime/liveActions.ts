@@ -212,6 +212,9 @@ export const LIVE_ACTIONS: LiveAction[] = [
     toCommand: () => ({ type: "Action", name: "dungeon_room_cancel", args: [] }) },
   { name: "dungeon_room_list", label: "Danh sách phòng phó bản đội", description: "Làm mới danh sách phòng (2f/01)", hidden: true, params: [],
     toCommand: () => ({ type: "Action", name: "dungeon_room_list", args: [] }) },
+  { name: "dungeon_buy", label: "Mua lượt phó bản", description: "Mua thêm lượt phó bản bằng Vàng/Xu (54/02)", hidden: true,
+    params: [{ ...int("dungeon", "Id phó bản"), required: false, placeholder: "2" }],
+    toCommand: (p) => ({ type: "Action", name: "dungeon_buy", args: [p.dungeon ?? "2"] }) },
   { name: "party_reply", label: "Trả lời lời mời/xin đội", description: "Đồng ý/từ chối lời mời (invite) hoặc lời xin vào đội (request) đang chờ",
     params: [
       { name: "kind", label: "Loại (invite|request)", type: "string", required: true },
@@ -273,6 +276,20 @@ export const LIVE_ACTIONS: LiveAction[] = [
     toCommand: () => ({ type: "Action", name: "offline_exp_info", args: [] }) },
   { name: "mail_claim_all", label: "Nhận quà thư", description: "Nhận quà đính kèm của mọi thư (53/03 + 53/01 từng thư)", params: [], hidden: true,
     toCommand: () => ({ type: "Action", name: "mail_claim_all", args: [] }) },
+  // --- Bạn bè: Tặng quà & Nhận quà (0e/12 + 0e/13, cap 26/10) ---
+  { name: "friend_gift_all", label: "Tặng & Nhận quà bạn bè", description: "Tặng quà thể lực cho tất cả bạn bè và nhận tất cả quà gửi lại", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "friend_gift_all", args: [] }) },
+  { name: "friend_send_gift", label: "Tặng quà bạn bè", description: "Gửi tặng quà thể lực cho toàn bộ danh sách bạn bè", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "friend_send_gift", args: [] }) },
+  { name: "friend_receive_gift", label: "Nhận quà bạn bè", description: "Nhận tất cả quà bạn bè đã gửi", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "friend_receive_gift", args: [] }) },
+  // --- Chiêu mộ: Rút bí cấp tướng & Rút thẻ tướng (42/01, cap 26/10) ---
+  { name: "pull_secret", label: "Rút 1 bí cấp tướng", description: "Rút 1 bí cấp võ tướng (tiêu 9.000 Xu)", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "pull_secret", args: [] }) },
+  { name: "pull_card", label: "Rút 1 thẻ tướng", description: "Rút 1 thẻ chiêu mộ võ tướng (tiêu 9.000 Xu)", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "pull_card", args: [] }) },
+  { name: "pull_all", label: "Rút Bí cấp & Thẻ tướng", description: "Rút 1 bí cấp tướng và 1 thẻ tướng (tiêu 18.000 Xu)", params: [], hidden: true,
+    toCommand: () => ({ type: "Action", name: "pull_all", args: [] }) },
   { name: "pet_out", label: "Võ tướng xuất chiến", description: "Chọn võ tướng xuất chiến (13/01); võ tướng đang xuất chiến tự về nghỉ", params: [int("model", "Model võ tướng")], hidden: true,
     toCommand: (p) => ({ type: "Action", name: "pet_out", args: [p.model] }) },
   { name: "pet_rest", label: "Võ tướng nghỉ", description: "Cho võ tướng đang xuất chiến nghỉ (CHƯA có gói tin)", params: [], hidden: true,
@@ -335,6 +352,38 @@ export const LIVE_ACTIONS: LiveAction[] = [
       );
       return steps;
     } },
+  { name: "open_inn", label: "Đến Nhà Trọ Trác Quận", description: "Warp đến Nhà Trọ Trác Quận (12007) và tải danh sách võ tướng", params: [],
+    toCommand: () => ({ type: "Action", name: "open_inn", args: [] }),
+    toSteps: (_p, ctx) => {
+      const steps: ActionStep[] = [];
+      if (ctx.map !== 12007) {
+        const warpDef = LIVE_ACTIONS.find((a) => a.name === "warp_map");
+        const rawSteps = warpDef?.toSteps ? warpDef.toSteps({ mapId: "12007" }, ctx) : [];
+        for (const s of rawSteps) {
+          if (!("end" in s)) steps.push(s);
+        }
+      }
+      steps.push(
+        { cmd: { type: "Action", name: "move", args: ["350", "450"] }, afterMs: 2200 },
+        { cmd: { type: "Action", name: "interact_prep", args: ["8"] }, afterMs: 300 },
+        { cmd: { type: "Action", name: "talk_npc", args: ["1"] }, afterMs: 1500 },
+        { cmd: { type: "Action", name: "send_menu", args: ["32"] }, afterMs: 600 },
+        { cmd: { type: "Action", name: "ready_1406", args: [] }, afterMs: 300 },
+        { cmd: { type: "Action", name: "inn_prep_7a", args: [] }, afterMs: 300 },
+        { cmd: { type: "Action", name: "open_inn_request", args: [] }, afterMs: 300 },
+        { cmd: { type: "Action", name: "ready_1406", args: [] }, afterMs: 300 },
+        { cmd: { type: "Action", name: "escort_query", args: [] }, afterMs: 500 },
+      );
+      return steps;
+    } },
+  { name: "open_inn_request", label: "Mở Nhà Trọ (1f/0a)", description: "Gửi gói mở Nhà Trọ (1f/0a)", hidden: true, params: [],
+    toCommand: () => ({ type: "Action", name: "open_inn_request", args: [] }) },
+  { name: "inn_prep_7a", label: "Khởi tạo Nhà Trọ (7a/01)", description: "Gửi gói khởi tạo Nhà Trọ (7a/01)", hidden: true, params: [],
+    toCommand: () => ({ type: "Action", name: "inn_prep_7a", args: [] }) },
+  { name: "escort_query", label: "Kiểm tra Vận Tiêu (56/01)", description: "Gửi gói kiểm tra trạng thái Vận Tiêu (56/01)", hidden: true, params: [],
+    toCommand: () => ({ type: "Action", name: "escort_query", args: [] }) },
+  { name: "escort_start", label: "Bắt đầu Vận Tiêu", description: "Cử võ tướng trong Nhà Trọ đi Vận Tiêu", params: [int("slot", "Ô Pet trong Nhà Trọ", "1")],
+    toCommand: (p) => ({ type: "Action", name: "escort_start", args: [p.slot ?? "1"] }) },
   { name: "open_bank", label: "Mở kho Tiền Trang", description: "Mở kho Tiền Trang tại vị trí hiện tại (hoặc warp về Tiền Trang nếu đang ở xa)", params: [],
     toCommand: () => ({ type: "Action", name: "open_bank", args: [] }),
     toSteps: (_p, ctx) => {
@@ -374,8 +423,12 @@ export const LIVE_ACTIONS: LiveAction[] = [
       { cmd: { type: "Action", name: "close_bank", args: [] }, afterMs: 150 },
       { cmd: { type: "Action", name: "ready_1406", args: [] }, afterMs: 250 },
     ] },
-  { name: "talk_npc", label: "Nói chuyện NPC", description: "Gửi gói thoại NPC (14/01)", hidden: true, params: [int("npcId", "NPC ID")],
-    toCommand: (p) => ({ type: "Action", name: "talk_npc", args: [p.npcId ?? "1"] }) },
+  { name: "talk_npc", label: "Nói chuyện NPC", description: "Gửi gói thoại NPC (14/01)", hidden: true,
+    params: [{ ...int("npcId", "NPC ID"), required: false }, { ...int("npc", "NPC ID"), required: false }],
+    toCommand: (p) => ({ type: "Action", name: "talk_npc", args: [p.npcId ?? p.npc ?? "1"] }) },
+  { name: "click", label: "Click NPC", description: "Gửi gói thoại NPC (14/01)", hidden: true,
+    params: [{ ...int("npc", "NPC ID"), required: false }, { ...int("npcId", "NPC ID"), required: false }],
+    toCommand: (p) => ({ type: "Action", name: "click", args: [p.npc ?? p.npcId ?? "1"] }) },
   { name: "send_menu", label: "Chọn menu đối thoại", description: "Gửi gói chọn menu NPC (14/09)", hidden: true, params: [int("option", "Lựa chọn")],
     toCommand: (p) => ({ type: "Action", name: "send_menu", args: [p.option ?? "1"] }) },
   { name: "set_item_lists", label: "Cài đặt danh sách vật phẩm tự động", description: "Cập nhật danh sách vật phẩm auto (tự vứt, tự mở...)", hidden: true,

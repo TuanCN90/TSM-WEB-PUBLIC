@@ -35,7 +35,7 @@ export const DUNGEON_ROOM_JOIN_VERIFIED = true;
 export const DUNGEON_ROOM_JOIN_PENDING_MESSAGE =
   "Gói thành viên VÀO phòng phó bản đội (2f/03) chưa có pcap nên bot không gửi — xem docs/DUNGEON_TEAM_KNOWLEDGE.md §4";
 
-export const DUNGEON_ROOM_ACTIONS = ["dungeon_room_create", "dungeon_room_join", "dungeon_room_start", "dungeon_room_cancel", "dungeon_room_list", "dungeon_room_ready", "dungeon_exit"] as const;
+export const DUNGEON_ROOM_ACTIONS = ["dungeon_room_create", "dungeon_room_join", "dungeon_room_start", "dungeon_room_cancel", "dungeon_room_list", "dungeon_room_ready", "dungeon_exit", "dungeon_buy"] as const;
 export type DungeonRoomAction = (typeof DUNGEON_ROOM_ACTIONS)[number];
 export const isDungeonRoomAction = (name: string): name is DungeonRoomAction => (DUNGEON_ROOM_ACTIONS as readonly string[]).includes(name);
 

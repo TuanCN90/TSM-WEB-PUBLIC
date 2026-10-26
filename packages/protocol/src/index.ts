@@ -429,6 +429,8 @@ export interface DungeonSoloConfig {
   type: DungeonSoloType;
   bracket: number; // 0 = tự động theo cấp, 1 = 15-80, 2 = 81-150, 3 = 151-200, 4 = 201-400
   leaveParty: boolean;
+  attempts?: number; // 1 = 1 lượt mặc định, 2 = 2 lượt (chạy 2 lần 3 phó bản đơn)
+  autoBuyAttempts?: boolean; // Tự động mua thêm lượt khi hết lượt miễn phí
 }
 
 export interface DungeonSoloResult {
@@ -446,11 +448,99 @@ export interface DungeonSoloState {
   phase: DungeonSoloPhase;
   currentType?: "khieu_chien" | "san_kho_bau" | "tim_dau_dau";
   currentDungeonId?: number;
+  currentRound?: number; // 1 hoặc 2
+  totalRounds?: number; // 1 hoặc 2
   completedTypes: ("khieu_chien" | "san_kho_bau" | "tim_dau_dau")[];
   results?: DungeonSoloResult[];
   message: string;
   phaseAt: number;
   canRun?: boolean;
+}
+
+export type WorldBossPhase =
+  | "idle"
+  | "leaving_party"
+  | "preparing"
+  | "warping"
+  | "walking"
+  | "healing"
+  | "using_ticket"
+  | "challenging"
+  | "in_battle"
+  | "reviving"
+  | "finishing"
+  | "done"
+  | "error";
+
+export interface WorldBossConfig {
+  enabled: boolean;
+  attempts: number; // 1..7 (mặc định 7)
+  bossPetId?: number; // Model pet đánh boss (vd 41387: Ma Quan Vũ)
+  bossPetWeapon?: number; // ID VKCD pet (vd 64541: Thanh Long Đao)
+  autoRevive: boolean; // Tự hồi sinh ở Quỷ Môn Quan 12007 nếu tử vong (mặc định true)
+  useTickets: boolean; // Dùng vật phẩm 46629 (Vé Khiêu Chiến Boss) cho lượt 6 & 7 (mặc định true)
+  returnToTrain: boolean; // Quay về bãi train cũ sau khi xong (mặc định true)
+}
+
+export interface WorldBossState {
+  phase: WorldBossPhase;
+  currentAttempt: number;
+  totalAttempts: number;
+  ticketsUsed: number;
+  message: string;
+  phaseAt: number;
+  canRun?: boolean;
+}
+
+export interface DailyChecklistItemDef {
+  key: string;
+  title: string;
+  maxCount: number; // 1, 2, or 3
+  description?: string;
+}
+
+export const DAILY_CHECKLIST_CATALOG: DailyChecklistItemDef[] = [
+  { key: "checkin", title: "Điểm danh ngày", maxCount: 1, description: "Điểm danh nhận quà đăng nhập hàng ngày" },
+  { key: "onlineReward", title: "Quà Online", maxCount: 1, description: "Nhận tất cả các mốc quà Online theo thời gian online" },
+  { key: "escort", title: "Vận tiêu", maxCount: 3, description: "Vận tiêu 3 lượt hàng ngày" },
+  { key: "solo_khieu_chien", title: "Phó bản Đơn [Khiêu chiến Ba Đậu Yêu]", maxCount: 2, description: "Vượt 2 lượt phó bản đơn Khiêu chiến Ba Đậu Yêu" },
+  { key: "solo_san_kho_bau", title: "Phó bản Đơn [Săn Kho Báu]", maxCount: 2, description: "Vượt 2 lượt phó bản đơn Săn Kho Báu" },
+  { key: "solo_tim_dau_dau", title: "Phó bản Đơn [Tìm Đậu Đậu]", maxCount: 2, description: "Vượt 2 lượt phó bản đơn Tìm Đậu Đậu" },
+  { key: "team_thao_phat", title: "Phó bản Đội [Thảo Phạt Thiên Sứ]", maxCount: 1, description: "Phó bản tổ đội Thảo Phạt Thiên Sứ" },
+  { key: "team_hoan_quan", title: "Phó bản Đội [Ngày Tàn Hoạn Quan]", maxCount: 1, description: "Phó bản tổ đội Ngày Tàn Hoạn Quan" },
+  { key: "world_boss", title: "Boss Thế Giới", maxCount: 1, description: "Khiêu chiến Boss Thế Giới tại Trác Quận (1910, 1190)" },
+  { key: "combine_item", title: "Hợp vật phẩm", maxCount: 1, description: "Hợp Lông Vũ hoặc nguyên liệu nâng cấp" },
+  { key: "dijie_2h", title: "Dị giới 2h", maxCount: 1, description: "Tu luyện Dị giới 2 giờ" },
+  { key: "xu_lap_ba", title: "Xu lạp Bá", maxCount: 1, description: "Nhận / dùng Xu lạp Bá" },
+  { key: "gift_friend", title: "Tặng quà bạn", maxCount: 1, description: "Tặng thể lực / quà cho bạn bè" },
+  { key: "spin_gold", title: "Quay 1 xu vàng", maxCount: 1, description: "Vòng quay may mắn 1 xu vàng" },
+  { key: "pull_secret", title: "Rút 1 bí cấp tướng", maxCount: 1, description: "Rút miễn phí / 1 lần bí cấp võ tướng" },
+  { key: "pull_card", title: "Rút 1 thẻ tướng", maxCount: 1, description: "Rút thẻ chiêu mộ võ tướng" },
+];
+
+export interface DailyChecklistItemState {
+  currentCount: number;
+  done: boolean;
+  updatedAt?: number;
+}
+
+export interface DailyChecklistState {
+  dateKey: string; // YYYY-MM-DD theo múi giờ Đài Loan (UTC+8)
+  items: Record<string, DailyChecklistItemState>;
+}
+
+export function getTaiwanDateKey(ts = Date.now()): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(ts));
+  } catch {
+    const twDate = new Date(ts + 8 * 3600 * 1000);
+    return twDate.toISOString().slice(0, 10);
+  }
 }
 
 /** Một phòng trong danh sách phòng phó bản đội đang chờ (S→C 2f/01). */
@@ -600,6 +690,9 @@ export interface SkillInfo {
   desc?: string;
   level?: number;
   sp?: number;
+  type?: "base" | "awakened" | "exclusive_weapon";
+  enabled?: boolean;
+  disabledReason?: string;
 }
 
 export interface BattleSlotDef {
@@ -728,8 +821,70 @@ export interface CharacterState {
   dungeonTeam?: DungeonTeamState;
   /** Trạng thái phó bản đơn (server điền). */
   dungeonSolo?: DungeonSoloState;
+  /** Trạng thái săn Boss Thế Giới (server điền). */
+  worldBoss?: WorldBossState;
+  /** Danh sách theo dõi nhiệm vụ ngày Checklist Daily (server điền). */
+  dailyChecklist?: DailyChecklistState;
   /** Phòng phó bản đội của chính nhân vật (engine điền từ gói 2f/xx). */
   dungeonRoom?: DungeonRoomState;
+  /** Danh sách bạn bè và trạng thái quà tặng (`0e/05` + `0e/0c`). */
+  friends?: FriendInfo[];
+  /** Danh sách võ tướng trong Nhà Trọ (S→C 1f/06). */
+  innPets?: InnPetInfo[];
+  /** Trạng thái vận tiêu (S→C 56/03, counter CTR_ESCORT và server service). */
+  escort?: EscortState;
+}
+
+export interface FriendInfo {
+  uid: string;
+  name: string;
+  status: number;
+}
+
+/** Thông tin võ tướng gửi trong Nhà Trọ (S→C 1f/06). */
+export interface InnPetInfo {
+  slot: number; // 1-based slot index trong nhà trọ
+  model: number; // ID võ tướng
+  name: string;
+  level: number;
+  exp: number;
+  hp: number;
+  status: number; // 0 = trong nhà trọ, 1 = đang vận tiêu
+}
+
+/** Thông tin chuyến vận tiêu đang diễn ra (S→C 56/03). */
+export interface EscortActiveInfo {
+  slot: number; // Slot pet trong nhà trọ đang vận tiêu
+  petName?: string;
+  startTime: number; // Thời gian bắt đầu (epoch ms)
+  endTime: number; // Thời gian hoàn thành (epoch ms)
+  durationHours: number; // Thời lượng (mặc định 4 giờ)
+}
+
+/** Cấu hình tự động vận tiêu cho từng tài khoản (lưu độc lập trong data/escort-configs.json). */
+export interface EscortConfig {
+  enabled: boolean;
+  selectedPetSlot?: number; // Slot pet chỉ định trong nhà trọ (duy nhất pet này được phép vận tiêu)
+  selectedPetName?: string; // Tên pet (để hiển thị và đối soát an toàn)
+  autoClaimReward?: boolean; // Tự nhận thưởng khi xong lượt
+}
+
+export type EscortPhase =
+  | "idle"
+  | "moving_to_inn"
+  | "opening_inn"
+  | "escorting"
+  | "claiming_reward"
+  | "completed_daily"
+  | "error";
+
+export interface EscortState {
+  phase: EscortPhase;
+  dailyCount: number; // Số lượt đã vận tiêu trong ngày (0..3)
+  maxDailyCount: number; // Tối đa 3 lượt / ngày
+  activeEscort?: EscortActiveInfo;
+  message?: string;
+  updatedAt?: number;
 }
 
 export interface ChaseConfig {

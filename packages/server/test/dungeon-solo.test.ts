@@ -11,12 +11,18 @@ const origEnv = process.env.TSBOT_DATA_DIR;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "tsbot-dungeon-solo-test-"));
+  process.env.DATA_DIR = tempDir;
   process.env.TSBOT_DATA_DIR = tempDir;
 });
 
 afterEach(() => {
-  if (origEnv) process.env.TSBOT_DATA_DIR = origEnv;
-  else delete process.env.TSBOT_DATA_DIR;
+  if (origEnv) {
+    process.env.DATA_DIR = origEnv;
+    process.env.TSBOT_DATA_DIR = origEnv;
+  } else {
+    delete process.env.DATA_DIR;
+    delete process.env.TSBOT_DATA_DIR;
+  }
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -221,7 +227,7 @@ describe("DungeonSoloService — điều phối phó bản đơn", () => {
 
   it("ghi nhận baseline EXP và ghi log + exp khi hoàn thành phó bản", async () => {
     const store = new DungeonSoloConfigStore();
-    store.set("player1", { enabled: false, type: "khieu_chien" });
+    store.set("player1", { enabled: false, type: "khieu_chien", attempts: 1, autoBuyAttempts: false });
 
     const mockConn = makeMockConn({
       location: { map: 12001, x: 100, y: 100 },
@@ -388,7 +394,7 @@ describe("DungeonSoloService — điều phối phó bản đơn", () => {
 
   it("chuỗi 3 phó bản: nếu phó bản 1 đã hoàn thành rồi (server từ chối mã 4) thì skip và log đúng câu, tiếp tục chạy phó bản 2", async () => {
     const store = new DungeonSoloConfigStore();
-    store.set("player1", { enabled: false, type: "all" });
+    store.set("player1", { enabled: false, type: "all", attempts: 1, autoBuyAttempts: false });
 
     const mockConn = makeMockConn(
       { location: { map: 12001, x: 100, y: 100 }, player: { name: "Hero", level: 100 } as any },
@@ -434,5 +440,38 @@ describe("DungeonSoloService — điều phối phó bản đơn", () => {
     // Tick tiếp theo: tạo phòng san_kho_bau (id 7) thành công -> entering
     await (svc as any).tick();
     expect(svc.stateFor("player1").phase).toBe("entering");
+  });
+
+  it("hỗ trợ chạy 2 lượt phó bản đơn khi attempts = 2 và tự mua lượt khi bật autoBuyAttempts", async () => {
+    const store = new DungeonSoloConfigStore();
+    store.set("player1", { enabled: false, type: "all", attempts: 2, autoBuyAttempts: true });
+
+    const boughtIds: number[] = [];
+    const mockConn = makeMockConn(
+      { location: { map: 12001, x: 100, y: 100 }, player: { name: "Hero", level: 160 } as any },
+      (action, params) => {
+        if (action === "dungeon_buy") {
+          boughtIds.push(Number(params?.dungeon));
+          return { ok: true };
+        }
+        return undefined;
+      }
+    );
+    const host: DungeonSoloHost = {
+      entries: () => [["player1", mockConn as any]],
+      pushCharacter: () => {},
+    };
+
+    const svc = new DungeonSoloService(host, store);
+    svc.startSolo("player1");
+
+    const st = svc.stateFor("player1");
+    expect(st.currentRound).toBe(1);
+    expect(st.totalRounds).toBe(2);
+
+    // Mua lượt trực tiếp qua buySolo không truyền id: tự động mua cả 3 phó bản cấp 160 (id 4, 8, 12)
+    const buyRes = await svc.buySolo("player1");
+    expect(buyRes.ok).toBe(true);
+    expect(boughtIds).toEqual([4, 8, 12]);
   });
 });

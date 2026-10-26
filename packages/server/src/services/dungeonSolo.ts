@@ -13,7 +13,7 @@ import type {
 } from "@tsbot/protocol";
 import { DUNGEON_SOLO_CATALOG, getSoloDungeonDef } from "@tsbot/protocol";
 import { type GameConnection, MSG } from "@tsbot/engine";
-import type { DungeonSoloConfigStore } from "./store";
+import type { DailyChecklistStore, DungeonSoloConfigStore } from "./store";
 
 const TICK_MS = 2000;
 const MAX_FAILS = 3;
@@ -36,6 +36,9 @@ interface Runtime {
   phase: DungeonSoloPhase;
   phaseAt: number;
   fails: number;
+  round: number;
+  maxRounds: number;
+  boughtThisRound?: boolean;
   queue: ("khieu_chien" | "san_kho_bau" | "tim_dau_dau")[];
   currentType?: "khieu_chien" | "san_kho_bau" | "tim_dau_dau";
   currentDef?: DungeonSoloDef;
@@ -62,7 +65,27 @@ export class DungeonSoloService {
   constructor(
     private host: DungeonSoloHost,
     private store: DungeonSoloConfigStore,
+    private checklistStore?: DailyChecklistStore,
+    private onFinished?: (accountId: string) => void,
   ) {}
+
+  /** Tắt toàn bộ tính năng tự động bỏ chạy (escapeIfNotFullParty & autoEscape) và bỏ qua chốt chặn tổ đội */
+  private async disableAutoEscape(conn: GameConnection) {
+    conn.partyGate = undefined;
+    await conn.dispatch("set_party_config", {
+      inviteFrom: "",
+      requestFromJson: "[]",
+      role: "none",
+      leaderName: "",
+      membersJson: "[]",
+      escapeIfNotFullParty: "0",
+    }, { quiet: true }).catch(() => undefined);
+    await conn.dispatch("set_battle_config", {
+      autoEscape: "0",
+    }, { quiet: true }).catch(() => undefined);
+    conn.partyGate = undefined;
+    conn.log("info", "🛡️ [Phó bản đơn] Đã tắt toàn bộ tính năng tự động bỏ chạy & bỏ qua chờ tổ đội", "game");
+  }
 
   start() {
     this.timer ??= setInterval(() => {
@@ -82,6 +105,9 @@ export class DungeonSoloService {
         phase: "idle",
         phaseAt: Date.now(),
         fails: 0,
+        round: 1,
+        maxRounds: 1,
+        boughtThisRound: false,
         queue: [],
         completedTypes: [],
         results: [],
@@ -101,6 +127,8 @@ export class DungeonSoloService {
       phase: r.phase,
       currentType: r.currentType,
       currentDungeonId: r.currentDef?.id,
+      currentRound: r.round,
+      totalRounds: r.maxRounds,
       completedTypes: [...r.completedTypes],
       results: [...r.results],
       message: r.message,
@@ -129,6 +157,9 @@ export class DungeonSoloService {
         ? ["khieu_chien", "san_kho_bau", "tim_dau_dau"]
         : [cfg.type];
 
+    r.round = 1;
+    r.maxRounds = cfg.attempts === 2 ? 2 : 1;
+    r.boughtThisRound = false;
     r.queue = queue;
     r.currentType = queue[0];
     r.completedTypes = [];
@@ -138,20 +169,66 @@ export class DungeonSoloService {
     r.roomCreated = false;
     r.dungeonStartedAt = undefined;
 
+    conn.partyGate = undefined;
     this.store.set(accountId, { enabled: true });
 
     const ch = conn.character();
-    if (cfg.leaveParty && ch?.party.joined) {
-      this.setPhase(r, "leaving_party", "Rời đội trước khi vào phó bản đơn...");
-    } else if (ch?.location.map === SAFE_HUB_MAP) {
-      this.setPhase(r, "creating_room", `Đang chuẩn bị vào ${r.currentType}...`);
+    if (ch?.party.joined) {
+      this.setPhase(r, "leaving_party", "Đang có đội — rời đội trước khi vào phó bản đơn...");
     } else {
-      this.setPhase(r, "warping", "Di chuyển về Trác Quận để bắt đầu phó bản đơn...");
+      void this.disableAutoEscape(conn);
+      if (ch?.location.map === SAFE_HUB_MAP) {
+        this.setPhase(r, "creating_room", `Đang chuẩn bị vào ${r.currentType}...`);
+      } else {
+        this.setPhase(r, "warping", "Di chuyển về Trác Quận để bắt đầu phó bản đơn...");
+      }
     }
 
-    conn.log("info", `⚔️ [Phó bản đơn] Bắt đầu chế độ: ${cfg.type === "all" ? "Chuỗi 3 phó bản đơn" : queue[0]}`, "game");
+    const roundMsg = r.maxRounds > 1 ? ` (${r.maxRounds} lượt chạy)` : "";
+    conn.log("info", `⚔️ [Phó bản đơn] Bắt đầu chế độ: ${cfg.type === "all" ? "Chuỗi 3 phó bản đơn" : queue[0]}${roundMsg}`, "game");
     this.host.pushCharacter(accountId);
     return { ok: true };
+  }
+
+  async buySolo(accountId: string, dungeonId?: number): Promise<{ ok: boolean; message?: string }> {
+    const canonicalId = canon(accountId);
+    const conn = this.host.entries().find(([id]) => canon(id) === canonicalId)?.[1];
+    if (!conn) return { ok: false, message: "Tài khoản chưa kết nối" };
+    const ch = conn.character();
+    const level = ch?.player.level || 1;
+    const cfg = this.store.get(accountId);
+
+    const idsToBuy: { id: number; name: string }[] = [];
+    if (dungeonId) {
+      const def = DUNGEON_SOLO_CATALOG.find((d) => d.id === dungeonId);
+      idsToBuy.push({ id: dungeonId, name: def?.typeName ?? `Phó bản #${dungeonId}` });
+    } else if (cfg.type === "all") {
+      const types: ("khieu_chien" | "san_kho_bau" | "tim_dau_dau")[] = ["khieu_chien", "san_kho_bau", "tim_dau_dau"];
+      for (const t of types) {
+        const def = getSoloDungeonDef(t, level, cfg.bracket);
+        if (def && !idsToBuy.some((x) => x.id === def.id)) {
+          idsToBuy.push({ id: def.id, name: def.typeName });
+        }
+      }
+    } else {
+      const def = getSoloDungeonDef(cfg.type, level, cfg.bracket);
+      if (def) {
+        idsToBuy.push({ id: def.id, name: def.typeName });
+      }
+    }
+
+    if (idsToBuy.length === 0) {
+      return { ok: false, message: "Không xác định được phó bản cần mua lượt" };
+    }
+
+    for (const item of idsToBuy) {
+      await conn.dispatch("dungeon_buy", { dungeon: item.id });
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    const names = idsToBuy.map((x) => x.name).join(", ");
+    conn.log("info", `🛒 [Phó bản đơn] Đã mua thêm 1 lượt cho: ${names}`, "game");
+    return { ok: true, message: `Đã mua thêm 1 lượt cho: ${names}` };
   }
 
   stopSolo(accountId: string): { ok: boolean; message?: string } {
@@ -170,6 +247,7 @@ export class DungeonSoloService {
     this.setPhase(r, "idle", "Đã dừng phó bản đơn");
     this.store.set(accountId, { enabled: false });
     this.host.pushCharacter(accountId);
+    this.onFinished?.(accountId);
     return { ok: true };
   }
 
@@ -187,6 +265,7 @@ export class DungeonSoloService {
     this.setPhase(r, "idle", "Đã thoát phó bản");
     this.store.set(accountId, { enabled: false });
     this.host.pushCharacter(accountId);
+    this.onFinished?.(accountId);
     return { ok: true };
   }
 
@@ -209,10 +288,18 @@ export class DungeonSoloService {
         if (!ch) continue;
         const now = Date.now();
 
+        conn.partyGate = undefined;
+
         switch (r.phase) {
           case "leaving_party": {
+            conn.partyGate = undefined;
             if (!ch.party.joined) {
-              this.setPhase(r, "warping", "Đã rời đội. Về Trác Quận chuẩn bị vào phó bản...");
+              await this.disableAutoEscape(conn);
+              if (ch.location.map === SAFE_HUB_MAP) {
+                this.setPhase(r, "creating_room", `Đang chuẩn bị vào ${r.currentType}...`);
+              } else {
+                this.setPhase(r, "warping", "Đã rời đội & tắt auto chạy. Về Trác Quận chuẩn bị vào phó bản...");
+              }
               break;
             }
             await conn.dispatch("leave_party", undefined, { quiet: true }).catch(() => undefined);
@@ -270,6 +357,7 @@ export class DungeonSoloService {
 
             if (res.ok) {
               r.roomCreated = true;
+              r.boughtThisRound = false;
               this.setPhase(r, "entering", `Phòng ${def.typeName} đã tạo. Đang bước vào cổng...`);
               break;
             }
@@ -277,6 +365,17 @@ export class DungeonSoloService {
             // Hết lượt trong ngày / đã hoàn thành (mã 4 hoặc server thông báo đã hoàn thành)
             const isDailyDone = (res as any).code === 4 || /hôm nay|hết lượt|hoàn thành|mua thêm lượt|mã 4/i.test(res.message ?? "");
             if (isDailyDone) {
+              // Tự động mua lượt khi: chọn opt đi 2 lần (cfg.attempts === 2) hoặc bật autoBuyAttempts hoặc đang ở lượt round > 1
+              const shouldAutoBuy = cfg.attempts === 2 || cfg.autoBuyAttempts || r.round > 1;
+              if (shouldAutoBuy && !r.boughtThisRound) {
+                r.boughtThisRound = true;
+                conn.log("info", `🛒 [Phó bản đơn] Hết lượt miễn phí — đang tự động mua thêm 1 lượt cho ${def.typeName} (-10 Vàng)...`, "game");
+                await conn.dispatch("dungeon_buy", { dungeon: def.id }, { quiet: true }).catch(() => undefined);
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                // Thử tạo lại phòng ở tick kế tiếp
+                break;
+              }
+
               const skipMsg = MSG.dungeonSoloDailyDone(def.typeName);
               conn.log("info", `⚠️ [Phó bản đơn] ${skipMsg}`, "game");
               r.completedTypes.push(r.currentType);
@@ -388,6 +487,9 @@ export class DungeonSoloService {
 
               if (actuallyCompleted) {
                 r.results.push(result);
+                if (r.currentType === "khieu_chien") this.checklistStore?.recordProgress(id, "solo_khieu_chien", 1);
+                else if (r.currentType === "san_kho_bau") this.checklistStore?.recordProgress(id, "solo_san_kho_bau", 1);
+                else if (r.currentType === "tim_dau_dau") this.checklistStore?.recordProgress(id, "solo_tim_dau_dau", 1);
                 const expParts: string[] = [];
                 if (playerExpGained > 0) {
                   expParts.push(`Nhân vật +${playerExpGained.toLocaleString("vi-VN")} EXP${playerExpPercent > 0 ? ` (+${playerExpPercent}%)` : ""}`);
@@ -485,12 +587,28 @@ export class DungeonSoloService {
     r.routeRuns = 0;
     r.exitSent = false;
     r.fails = 0;
+    r.boughtThisRound = false;
 
     if (r.queue.length > 0) {
       r.currentType = r.queue[0];
       r.currentDef = undefined;
       this.setPhase(r, "warping", `Chuyển sang phó bản tiếp theo: ${r.currentType}...`);
       conn.log("info", `⚔️ [Phó bản đơn] Chuẩn bị sang phó bản tiếp theo: ${r.currentType}...`, "game");
+      void conn.dispatch("dungeon_exit", undefined, { quiet: true }).catch(() => undefined);
+      void conn.dispatch("warp_map", { mapId: SAFE_HUB_MAP }, { quiet: true }).catch(() => undefined);
+    } else if (r.round < r.maxRounds) {
+      r.round++;
+      const cfg = this.store.get(accountId);
+      const queue: ("khieu_chien" | "san_kho_bau" | "tim_dau_dau")[] =
+        cfg.type === "all"
+          ? ["khieu_chien", "san_kho_bau", "tim_dau_dau"]
+          : [cfg.type];
+      r.queue = queue;
+      r.currentType = queue[0];
+      r.currentDef = undefined;
+      r.boughtThisRound = false;
+      this.setPhase(r, "warping", `Bắt đầu lượt ${r.round}/${r.maxRounds} (Chuỗi 3 phó bản đơn)...`);
+      conn.log("info", `🔄 [Phó bản đơn] Đã hoàn thành lượt ${r.round - 1}. Bắt đầu lượt ${r.round}/${r.maxRounds} (Chạy 2 lần 3 phó bản đơn)...`, "game");
       void conn.dispatch("dungeon_exit", undefined, { quiet: true }).catch(() => undefined);
       void conn.dispatch("warp_map", { mapId: SAFE_HUB_MAP }, { quiet: true }).catch(() => undefined);
     } else {
@@ -510,5 +628,6 @@ export class DungeonSoloService {
     this.store.set(accountId, { enabled: false });
     conn.log("info", `🎉 [Phó bản đơn] Đã hoàn tất toàn bộ phó bản đơn!${expMsg}`, "game");
     this.host.pushCharacter(accountId);
+    this.onFinished?.(accountId);
   }
 }

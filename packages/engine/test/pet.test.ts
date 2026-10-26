@@ -347,4 +347,150 @@ describe("Võ tướng xuất chiến (0f/08 + 13/04)", () => {
     expect(target03Log).toBeDefined();
     expect(target04Log).toBeDefined();
   });
+
+  it("tự động chuyển sang Đấu Vật khi cấu hình skill pet không có trong danh sách kỹ năng", () => {
+    const { s, sent, gameLogs } = session();
+    s.onData(frame(0x0f, 0x08, fx.mqv_0f08));
+    s.onData(frame(0x13, 0x04, fx.mqv_1304));
+    s.onData(frame(0x14, 0x0c, ""));
+
+    // Spawn quái
+    const p = Buffer.alloc(45);
+    p.writeUInt16LE(10201, 11 - 8);
+    p[29 - 8] = 0; p[30 - 8] = 3;
+    p.writeUInt32LE(1000, 31 - 8);
+    s.onData(frame(0x0b, 0x05, p.toString("hex")));
+
+    // Giả lập danh sách petSkills của pet hiện tại chỉ có 10000, 11005 (không có 13013 Loạn Kích)
+    const skillListHex = "0002" + "1027" + "6d2a"; // 10000, 10861
+    s.onData(frame(0x35, 0x01, skillListHex));
+
+    // Cài đặt pet dùng Loạn Kích (13013) mà pet không có
+    s.encodeAction("set_battle_config", ["10000", "13013", "1", "F1", "F1"]);
+    s.onData(frame(0x34, 0x01, "00"));
+
+    expect(sent.length).toBe(2);
+    // Pet frame (sent[1]): skillId tại offset 13, 14 (đã XOR 0xad)
+    const petSkillId = (sent[1]![13] ^ 0xad) | ((sent[1]![14] ^ 0xad) << 8);
+    expect(petSkillId).toBe(10000); // Đã fallback về Đấu Vật 10000
+
+    const warnLog = gameLogs.find((l) => l.includes("không có kỹ năng") && l.includes("chuyển sang [Đấu Vật]"));
+    expect(warnLog).toBeDefined();
+  });
+
+  it("gom Combo đầy đủ khi đòn hợp kích bao gồm cả kỹ năng đơn và kỹ năng AOE (không bị xé nhỏ log)", () => {
+    const { s, gameLogs } = session();
+    s.onData(frame(0x0f, 0x08, fx.mqv_0f08));
+    s.onData(frame(0x13, 0x04, fx.mqv_1304));
+    s.onData(frame(0x14, 0x0c, ""));
+
+    // Spawn quái tại (0, 2), (0, 3), (0, 4)
+    for (const c of [2, 3, 4]) {
+      const p = Buffer.alloc(45);
+      p.writeUInt16LE(10201, 11 - 8);
+      p[29 - 8] = 0; p[30 - 8] = c;
+      p.writeUInt32LE(1178, 31 - 8);
+      p.writeUInt32LE(100, 35 - 8);
+      p.writeUInt32LE(1178, 39 - 8);
+      p.writeUInt32LE(100, 43 - 8);
+      p[47 - 8] = 30;
+      s.onData(frame(0x0b, 0x05, p.toString("hex")));
+    }
+
+    // Giả lập 2 unit combo vào (0, 3):
+    // Unit 1: Lữ Bố (2,3) dùng Đấu Vật (10000) vào (0,3) gây 529 HP
+    // Unit 2: _XuanWu_ (3,4) dùng Hỏa Tiễn (12003 = 0x2ee3 = e3 2e) 3 targets -> subLen = 6 + 33 = 39 = 0x2700
+    const comboPayload = "00" +
+      // Block 1: Lữ Bố (2,3) Đấu Vật 1 target (0,3) -> subLen = 17 = 0x1100
+      "11000203102701010003010001191102000001" +
+      // Block 2: _XuanWu_ (3,4) Hỏa Tiễn (12003 = 0x2ee3 = e3 2e) 3 targets -> subLen = 6 + 33 = 39 = 0x2700
+      "2700" +
+      "0304e32e0301" +
+      "000301000119e500000001" +
+      "000201000119e700000001" +
+      "000401000119e600000001";
+
+    s.onData(frame(0x32, 0x01, comboPayload));
+    s.onData(frame(0x34, 0x01, "00"));
+
+    // Kiểm tra combo log hiển thị Combo (2) cho 2 unique actors thay vì bị ngắt đôi
+    const comboLog = gameLogs.find((l) => l.includes("⚡ Combo (2):"));
+    expect(comboLog).toBeDefined();
+    expect(comboLog).toContain("---- Võ tướng (2,3) dùng [Đấu Vật] - 529 HP");
+    expect(comboLog).toContain("---- Đồng đội (3,4) dùng [Hỏa Tiễn] - 229 HP");
+
+    // Và vẫn có log sát thương lan cho (0,2) và (0,4)
+    const splash02 = gameLogs.find((l) => l.includes("(0,2)") && l.includes("Hỏa Tiễn"));
+    const splash04 = gameLogs.find((l) => l.includes("(0,4)") && l.includes("Hỏa Tiễn"));
+    expect(splash02).toBeDefined();
+    expect(splash04).toBeDefined();
+  });
+
+  it("Triệu Vân (12027) hiển thị đủ 5 skill: 3 gốc, 1 Mê (Hồi Mã Thương), 1 VKCD (Long Đảm Thương -> S.ChấnĐiện)", () => {
+    const { s, state } = session();
+    const buf = Buffer.alloc(300);
+    buf[1] = 1; // count = 1
+    buf[2] = 1; // idx = 1
+    buf.writeUInt16LE(12027, 3); // model = 12027
+    buf.writeUInt32LE(1000, 5); // exp
+    buf[9] = 100; // level = 100
+    buf.writeUInt32LE(1000, 10); // hp
+    buf.writeUInt16LE(500, 14); // sp
+    buf[29] = 100; // fai
+    buf[31] = 0; // isAwakened = false
+    buf[33] = 8; // nameLen = 8
+    buf.write("Triệu Vân", 34);
+
+    const payload = buf.subarray(0, 2 + 254 + 8).toString("hex");
+    s.onData(frame(0x0f, 0x08, payload));
+    s.onData(frame(0x13, 0x04, "00fb2e")); // 12027
+
+    expect(state.petSkills).toHaveLength(5);
+    // 3 skill gốc: Bão Phong (13006), Phong Cuốn Tàn Vân (13009), Loạn Kích (13013)
+    const baseSkills = state.petSkills.filter((sk: any) => sk.type === "base");
+    expect(baseSkills).toHaveLength(3);
+    expect(baseSkills.every((sk: any) => sk.enabled === true)).toBe(true);
+
+    // 1 skill Mê: Hồi Mã Thương (21012), chưa học -> enabled = false
+    const awakened = state.petSkills.find((sk: any) => sk.type === "awakened");
+    expect(awakened).toBeDefined();
+    expect(awakened.id).toBe(21012);
+    expect(awakened.name).toBe("Hồi Mã Thương");
+    expect(awakened.enabled).toBe(false);
+    expect(awakened.disabledReason).toBe("Chưa học Mê");
+
+    // 1 skill VKCD: S.ChấnĐiện (13043), chưa trang bị -> enabled = false
+    const vkcd = state.petSkills.find((sk: any) => sk.type === "exclusive_weapon");
+    expect(vkcd).toBeDefined();
+    expect(vkcd.id).toBe(13043);
+    expect(vkcd.name).toBe("S.ChấnĐiện");
+    expect(vkcd.enabled).toBe(false);
+    expect(vkcd.disabledReason).toContain("Long Đảm Thương");
+  });
+
+  it("Triệu Vân khi trang bị Long Đảm Thương (item 64515) thì skill VKCD (S.ChấnĐiện) chuyển sang enabled: true", () => {
+    const { s, state } = session();
+    const buf = Buffer.alloc(300);
+    buf[1] = 1;
+    buf[2] = 1;
+    buf.writeUInt16LE(12027, 3);
+    buf.writeUInt32LE(1000, 5);
+    buf[9] = 100;
+    buf.writeUInt32LE(1000, 10);
+    buf.writeUInt16LE(500, 14);
+    buf[33] = 8;
+    buf.write("Triệu Vân", 34);
+
+    // Trang bị VKCD Long Đảm Thương tại slot vũ khí (pos = 2, eqStart = 2 + 32 + 8 = 42, slot 2: 42 + 3 + 2 * 35 = 115)
+    buf.writeUInt16LE(64515, 115);
+
+    const payload = buf.subarray(0, 2 + 254 + 8).toString("hex");
+    s.onData(frame(0x0f, 0x08, payload));
+    s.onData(frame(0x13, 0x04, "00fb2e"));
+
+    const vkcd = state.petSkills.find((sk: any) => sk.type === "exclusive_weapon");
+    expect(vkcd).toBeDefined();
+    expect(vkcd.enabled).toBe(true);
+    expect(vkcd.disabledReason).toBeUndefined();
+  });
 });

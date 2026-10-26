@@ -53,6 +53,16 @@ describe("Nhận Exp Offline (Free)", () => {
     expect(games.at(-1)).toContain("Exp Offline miễn phí +35.715 exp");
     vi.useRealTimers();
   });
+
+  it("02/0a dạng thông báo exp trận đấu (40476) hiển thị đầy đủ tên và lượng exp tăng", () => {
+    const { s, games } = setup();
+    // Giả lập 02/0a sau trận: Lữ Bố tăng 650 exp
+    // textId 40476 = 1c 9e 00 00, numArgs = 2, arg1 = string "Lu Bo" (5 bytes), arg2 = u32 650 (0x028a = 8a 02 00 00)
+    const luBoExpHex = "0003011c9e000002" + "00054c7520426f" + "028a020000";
+    s.onData(frame(0x02, 0x0a, luBoExpHex));
+    const expMsg = games.find((g) => g.includes("[Kinh Nghiệm]") && g.includes("650"));
+    expect(expMsg).toBeDefined();
+  });
 });
 
 describe("Nhận quà thư (53/xx)", () => {
@@ -238,11 +248,13 @@ describe("Hệ thống Trận đấu & Kỹ năng (Treo Rung 30 Dau Vat.pcap)", 
     s.onData(frame(0x0f, 0x08, (fx as any).mqv_0f08));
     s.onData(frame(0x13, 0x04, (fx as any).mqv_1304));
     expect(st().pet.name).toBe("Ma Quan Vũ");
-    expect(st().petSkills.length).toBe(3);
+    // Bộ kỹ năng đầy đủ gồm 5 skill (3 gốc, 1 Mê, 1 VKCD)
+    expect(st().petSkills.length).toBe(5);
     const skillIds = st().petSkills.map((sk: any) => sk.id);
-    expect(skillIds).toEqual([23003, 23015, 23016]);
-    // Không chứa ID vật phẩm rơi 21038
-    expect(skillIds).not.toContain(21038);
+    expect(skillIds.slice(0, 3)).toEqual([23003, 23015, 23016]);
+    // Chứa skill Mê 21038 (Yển Nguyệt) và skill VKCD 23027 (Hắc Quang)
+    expect(skillIds).toContain(21038);
+    expect(skillIds).toContain(23027);
     // Có chi phí SP chuẩn
     const htc = st().petSkills.find((sk: any) => sk.id === 23003);
     expect(htc?.sp).toBe(72);
@@ -971,6 +983,342 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
     expect(leaderRes?.message).toContain("Đã đến chỗ an toàn (142, 1631)");
     expect(state.location.x).toBe(142);
     expect(state.location.y).toBe(1631);
+  });
+
+  it("battleSpawnPlayer (0b/fa) không gửi gói 41/01 lên server (tránh kick mã 42)", () => {
+    const sent: Buffer[] = [];
+    const io: any = {
+      send: (b: Buffer) => sent.push(b),
+      patchState: () => {},
+      game: () => {},
+      log: () => {},
+    };
+    const s = tsOnlineCodec.create(io);
+    const frame = (cmd: number, sub: number, hex: string) => {
+      const b = Buffer.concat([Buffer.from([0, 0, cmd, sub]), Buffer.from(hex, "hex")]);
+      const f = Buffer.alloc(4 + b.length);
+      f[0] = 0xf4 ^ 0x99;
+      f[1] = 0x44 ^ 0x78;
+      f.writeUInt16LE(f.length, 2);
+      b.copy(f, 4);
+      for (let i = 2; i < f.length; i++) f[i] ^= 0xad;
+      return f;
+    };
+    // Gửi gói 0b/fa spawn player
+    const spawnPayload = "006905000102acd867d3aca80a000000000000000000000003029f010000e50000009f010000e50000007a0000030b4a756e53686958696f6e6701037a00";
+    s.onData(frame(0x0b, 0xfa, spawnPayload));
+    // Kiểm tra tuyệt đối không có frame nào chứa cmd 0x41, sub 0x01 được gửi
+    const has4101 = sent.some((b) => {
+      const dec = Buffer.from(b);
+      for (let i = 2; i < dec.length; i++) dec[i] ^= 0xad;
+      return dec.length >= 8 && dec[4] === 0x00 && dec[5] === 0x00 && dec[6] === 0x41 && dec[7] === 0x01;
+    });
+    expect(has4101).toBe(false);
+  });
+
+  it("thành viên trong đội bị chặn tự di chuyển (move, walk, warp_to_spot) và tự động truy kích", async () => {
+    const sent: Buffer[] = [];
+    const games: string[] = [];
+    let state: any = { location: { map: 12001, x: 300, y: 400 } };
+    const io: any = {
+      send: (b: Buffer) => sent.push(b),
+      patchState: (p: any) => { state = { ...state, ...p }; },
+      game: (msg: string) => games.push(msg),
+      log: () => {},
+    };
+    const s = tsOnlineCodec.create(io);
+    (s as any).party = {
+      snapshot: () => ({
+        joined: true,
+        leaderName: "LeaderAccount",
+        members: [
+          { slot: 1, name: "LeaderAccount", isLeader: true, isAdvisor: false, isSelf: false },
+          { slot: 2, name: "Me", isLeader: false, isAdvisor: false, isSelf: true },
+        ],
+      }),
+      leaderOf: () => "leader_uid",
+    };
+
+    // Thử move / walk
+    const moveRes = await s.executeAction!("move", ["500", "600"], (b) => sent.push(b), new AbortController().signal);
+    expect(moveRes?.ok).toBe(false);
+    expect(moveRes?.message).toContain("Đang trong tổ đội");
+
+    // Thử warp_to_spot
+    const warpRes = await s.executeAction!("warp_to_spot", ["12001", "500", "600"], (b) => sent.push(b), new AbortController().signal);
+    expect(warpRes?.ok).toBe(true); // âm thầm bỏ qua, không tự chạy làm desync
+    expect(sent.length).toBe(0); // không gửi gói di chuyển 06/01 nào
+  });
+
+  it("gói 14/08 không được đóng cờ trận đấu ở hiệp 0 khi quái địch còn sống (đóng thoại mở màn)", () => {
+    let inBattle = false;
+    const io: any = {
+      send: () => {},
+      patchState: (p: any) => { if (p.inBattle !== undefined) inBattle = p.inBattle; },
+      game: () => {},
+      log: () => {},
+    };
+    const s = tsOnlineCodec.create(io);
+    const frame = (cmd: number, sub: number, hex: string) => {
+      const b = Buffer.concat([Buffer.from([0, 0, cmd, sub]), Buffer.from(hex, "hex")]);
+      const f = Buffer.alloc(4 + b.length);
+      f[0] = 0xf4 ^ 0x99;
+      f[1] = 0x44 ^ 0x78;
+      f.writeUInt16LE(f.length, 2);
+      b.copy(f, 4);
+      for (let i = 2; i < f.length; i++) f[i] ^= 0xad;
+      return f;
+    };
+
+    // Vào trận
+    s.onData(frame(0x14, 0x0c, "00"));
+    expect(inBattle).toBe(true);
+
+    // Giả lập có quái địch còn sống và turn = 0 (vừa vào trận)
+    (s as any).battleUnits = [
+      { row: 0, col: 1, name: "Loan Kích Vệ Đội", hp: { cur: 1109, max: 1225 }, isEnemy: true },
+      { row: 3, col: 2, name: "JunDaGe", hp: { cur: 899, max: 1258 }, isEnemy: false, isPet: false },
+    ];
+    (s as any).battleTurnIndex = 0;
+
+    // Server gửi 14/08 00 2a đóng thoại mở màn trong khi quái còn 1109 HP
+    s.onData(frame(0x14, 0x08, "002a"));
+
+    // Trận đấu PHẢI tiếp tục, KHÔNG được đóng cờ trận
+    expect((s as any).inBattle).toBe(true);
+  });
+
+  it("khi nhân vật đã gục ngã (HP = 0), battleTurn không gửi lệnh đánh và triggerAutoHeal không dùng thuốc", () => {
+    const sent: Buffer[] = [];
+    const io: any = {
+      send: (b: Buffer) => sent.push(b),
+      patchState: () => {},
+      game: () => {},
+      log: () => {},
+    };
+    const s = tsOnlineCodec.create(io);
+    const frame = (cmd: number, sub: number, hex: string) => {
+      const b = Buffer.concat([Buffer.from([0, 0, cmd, sub]), Buffer.from(hex, "hex")]);
+      const f = Buffer.alloc(4 + b.length);
+      f[0] = 0xf4 ^ 0x99;
+      f[1] = 0x44 ^ 0x78;
+      f.writeUInt16LE(f.length, 2);
+      b.copy(f, 4);
+      for (let i = 2; i < f.length; i++) f[i] ^= 0xad;
+      return f;
+    };
+
+    // Vào trận
+    s.onData(frame(0x14, 0x0c, "00"));
+
+    // Cài đặt nhân vật QingLong gục ngã (HP = 0) và võ tướng Lữ Bố còn sống
+    (s as any).player = { name: "QingLong", hp: { cur: 0, max: 1000 }, sp: { cur: 100, max: 100 } };
+    (s as any).pet = { name: "Lữ Bố", hp: { cur: 1200, max: 1500 }, sp: { cur: 100, max: 100 } };
+    (s as any).battleUnits = [
+      { row: 3, col: 3, name: "QingLong", hp: { cur: 0, max: 1000 }, sp: { cur: 100, max: 100 }, isEnemy: false, isPet: false },
+      { row: 2, col: 3, name: "Lữ Bố", hp: { cur: 1200, max: 1500 }, sp: { cur: 100, max: 100 }, isEnemy: false, isPet: true },
+      { row: 0, col: 1, name: "Quái", hp: { cur: 500, max: 1000 }, isEnemy: true },
+    ];
+
+    // Turn bắt đầu (34/01)
+    s.onData(frame(0x34, 0x01, "00"));
+
+    // Giải mã các frame gửi đi
+    const decodedFrames = sent.map((b) => {
+      const dec = Buffer.from(b);
+      for (let i = 2; i < dec.length; i++) dec[i] ^= 0xad;
+      return dec;
+    });
+
+    // Tuyệt đối KHÔNG có frame lệnh nào cho hàng 3 cột 3 (nhân vật gục ngã)
+    const charAttack = decodedFrames.some((dec) => dec[4] === 0x00 && dec[5] === 0x00 && dec[6] === 0x32 && dec[7] === 0x01 && dec[9] === 3 && dec[10] === 3);
+    expect(charAttack).toBe(false);
+
+    // Nhưng võ tướng Lữ Bố (hàng 2 cột 3) còn sống vẫn được ra lệnh
+    const petAttack = decodedFrames.some((dec) => dec[4] === 0x00 && dec[5] === 0x00 && dec[6] === 0x32 && dec[7] === 0x01 && dec[9] === 2 && dec[10] === 3);
+    expect(petAttack).toBe(true);
+
+    // Kiểm tra triggerAutoHeal khi HP = 0: tuyệt đối không gửi gói 17/0f hồi máu cho nhân vật đã chết
+    sent.length = 0;
+    (s as any).inBattle = false;
+    (s as any).autoHeal = { enabled: true, player: { autoHp: true, hpPct: 80 }, pet: { autoHp: false, hpPct: 80 } };
+    (s as any).bag = new Map([[1, { id: 32043, qty: 10 }]]); // có thuốc hồi HP trong túi
+    (s as any).triggerAutoHeal(true);
+    expect(sent.length).toBe(0); // không gửi 17/0f khi HP = 0
+  });
+
+  it("0e/05 nạp danh sách bạn bè, 0e/0c cập nhật cờ quà tặng, friend_gift_all gửi 0e/12 và nhận 0e/13", async () => {
+    const { s, sent, st } = setup();
+
+    // 1. Giả lập server gửi 0e/05 với 2 bạn bè: friend 1 (chưa có quà), friend 2 (có quà chờ nhận status 0x02)
+    const f1Meta = Buffer.alloc(35, 0); f1Meta[18] = 0;
+    const f2Meta = Buffer.alloc(35, 0); f2Meta[18] = 2;
+    const body0e05 = Buffer.concat([
+      Buffer.from([0x00, 0x02, 0x00]),
+      Buffer.from("0100000000000000", "hex"), Buffer.from([4]), Buffer.from("Alex"), f1Meta,
+      Buffer.from("0200000000000000", "hex"), Buffer.from([3]), Buffer.from("Bob"), f2Meta,
+    ]);
+    s.onData(encodeFrame(Buffer.concat([Buffer.from([0, 0, 0x0e, 0x05]), body0e05])));
+
+    expect(st().friends).toHaveLength(2);
+    expect(st().friends[0]).toEqual({ uid: "0100000000000000", name: "Alex", status: 0 });
+    expect(st().friends[1]).toEqual({ uid: "0200000000000000", name: "Bob", status: 2 });
+
+    // 2. Chạy executeAction friend_gift_all
+    sent.length = 0;
+    const promise = s.executeAction!("friend_gift_all", [], () => {}, new AbortController().signal);
+
+    // Kiểm tra gói đầu tiên gửi đi là 0e/12 (tặng quà tất cả 2 bạn bè)
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent.length).toBeGreaterThanOrEqual(1);
+    const unxor1 = Buffer.from(sent[0]!, "hex");
+    for (let i = 2; i < unxor1.length; i++) unxor1[i] ^= 0xad;
+    expect(unxor1[6]).toBe(0x0e);
+    expect(unxor1[7]).toBe(0x12);
+    expect(unxor1[8]).toBe(0x00);
+    expect(unxor1[9]).toBe(2);
+
+    // Giả lập server gửi 0e/0c cập nhật cờ sau khi tặng: friend 1 -> 1, friend 2 -> 3
+    const body0e0c = Buffer.concat([
+      Buffer.from([0x00, 0x02]),
+      Buffer.from("0100000000000000", "hex"), Buffer.from([0x01]),
+      Buffer.from("0200000000000000", "hex"), Buffer.from([0x03]),
+    ]);
+    s.onData(encodeFrame(Buffer.concat([Buffer.from([0, 0, 0x0e, 0x0c]), body0e0c])));
+
+    // Chờ friend_gift_all hoàn tất
+    const res = await promise;
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("Đã tặng quà cho 2 bạn bè và nhận quà từ 1 bạn bè") });
+
+    // Kiểm tra gói thứ hai gửi đi là 0e/13 (nhận quà từ Bob)
+    expect(sent.length).toBe(2);
+    const unxor2 = Buffer.from(sent[1]!, "hex");
+    for (let i = 2; i < unxor2.length; i++) unxor2[i] ^= 0xad;
+    expect(unxor2[6]).toBe(0x0e);
+    expect(unxor2[7]).toBe(0x13);
+    expect(unxor2[8]).toBe(0x00);
+    expect(unxor2[9]).toBe(1);
+    expect(unxor2.subarray(10, 18).toString("hex")).toBe("0200000000000000");
+  });
+
+  it("pull_secret gửi đúng gói 42/01 cho bí cấp 45659 và tiêu 9000 xu", async () => {
+    const { s, sent, games } = setup();
+    sent.length = 0;
+    const res = await s.executeAction!("pull_secret", [], () => {}, new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("9.000 Xu") });
+    expect(sent.length).toBe(1);
+    const unxor = Buffer.from(sent[0]!, "hex");
+    for (let i = 2; i < unxor.length; i++) unxor[i] ^= 0xad;
+    expect(unxor[6]).toBe(0x42);
+    expect(unxor[7]).toBe(0x01);
+    expect(unxor.subarray(8).toString("hex")).toBe("00050101015bb22823010000");
+
+    // Server phản hồi 42/03 thành công
+    s.onData(frame(0x42, 0x03, "005bb201"));
+    expect(games.some((g) => g.includes("bí cấp võ tướng"))).toBe(true);
+  });
+
+  it("pull_card gửi đúng gói 42/01 cho thẻ tướng 45660 và tiêu 9000 xu", async () => {
+    const { s, sent, games } = setup();
+    sent.length = 0;
+    const res = await s.executeAction!("pull_card", [], () => {}, new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("9.000 Xu") });
+    expect(sent.length).toBe(1);
+    const unxor = Buffer.from(sent[0]!, "hex");
+    for (let i = 2; i < unxor.length; i++) unxor[i] ^= 0xad;
+    expect(unxor[6]).toBe(0x42);
+    expect(unxor[7]).toBe(0x01);
+    expect(unxor.subarray(8).toString("hex")).toBe("00050101025cb22823010000");
+
+    // Server phản hồi 42/03 thành công
+    s.onData(frame(0x42, 0x03, "005cb201"));
+    expect(games.some((g) => g.includes("chiêu mộ võ tướng"))).toBe(true);
+  });
+
+  it("pull_all gửi lần lượt rút bí cấp rồi rút thẻ (tổng 18.000 xu)", async () => {
+    const { s, sent } = setup();
+    sent.length = 0;
+    const res = await s.executeAction!("pull_all", [], () => {}, new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("18.000 Xu") });
+    expect(sent.length).toBe(2);
+    const unxor1 = Buffer.from(sent[0]!, "hex");
+    for (let i = 2; i < unxor1.length; i++) unxor1[i] ^= 0xad;
+    expect(unxor1.subarray(8).toString("hex")).toBe("00050101015bb22823010000");
+    const unxor2 = Buffer.from(sent[1]!, "hex");
+    for (let i = 2; i < unxor2.length; i++) unxor2[i] ^= 0xad;
+    expect(unxor2.subarray(8).toString("hex")).toBe("00050101025cb22823010000");
+  });
+
+  it("parse gói 1f/06 danh sách võ tướng trong Nhà Trọ và cập nhật innPets", () => {
+    const { s, st } = setup();
+    // Gói 1f/06 từ pcap:
+    // 00 (delimiter)
+    // 01 (slot 1)
+    // 15 37 (model 14101)
+    // 01 (level 1)
+    // 06 00 00 00 (exp 6)
+    // cd 00 00 00 (hp 205)
+    // 06 (nameLen 6)
+    // bd b2 a4 e5 ae 56 (Thái Văn Cơ in Big5)
+    // 00 (status 0: trong nhà trọ)
+    s.onData(frame(0x1f, 0x06, "000115370106000000cd00000006bdb2a4e5ae5600"));
+    expect(st().innPets).toBeDefined();
+    expect(st().innPets![0]).toMatchObject({
+      slot: 1,
+      model: 14101,
+      level: 1,
+      exp: 6,
+      hp: 205,
+      status: 0,
+    });
+  });
+
+  it("parse gói 56/03 trạng thái vận tiêu và tính đúng 4 giờ", () => {
+    const { s, st } = setup();
+    // Nạp pet vào nhà trọ trước
+    s.onData(frame(0x1f, 0x06, "000115370106000000cd00000006bdb2a4e5ae5600"));
+
+    // Gói 56/03 từ pcap khi đang vận tiêu:
+    // 00 01 (active = 1) 01 (slot = 1)
+    // 51 df 0b 31 38 9e e6 40 (start OLE)
+    // a6 34 61 86 3d 9e e6 40 (end OLE = start + 4h)
+    // 01 01 28 15
+    s.onData(frame(0x56, 0x03, "00010151df0b31389ee640a63461863d9ee64001012815"));
+    expect(st().escort).toBeDefined();
+    expect(st().escort!.phase).toBe("escorting");
+    expect(st().escort!.activeEscort).toBeDefined();
+    expect(st().escort!.activeEscort!.slot).toBe(1);
+    expect(st().escort!.activeEscort!.durationHours).toBe(4);
+  });
+
+  it("escort_start gửi đúng gói 56/02 và chặn nếu pet đang vận tiêu", async () => {
+    const { s, sent } = setup();
+    sent.length = 0;
+
+    // 1. Pet rảnh -> xuất phát thành công
+    const res = await s.executeAction!("escort_start", ["1"], (b) => sent.push(b.toString("hex")), new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("ô 1") });
+    expect(sent.length).toBe(1);
+    const unxor = Buffer.from(sent[0]!, "hex");
+    for (let i = 2; i < unxor.length; i++) unxor[i] ^= 0xad;
+    expect(unxor[6]).toBe(0x56);
+    expect(unxor[7]).toBe(0x02);
+    expect(unxor[9]).toBe(1);
+
+    // 2. Pet được đánh dấu đang vận tiêu (status = 1) -> chặn
+    s.onData(frame(0x1f, 0x06, "000115370106000000cd00000006bdb2a4e5ae5601"));
+    const res2 = await s.executeAction!("escort_start", ["1"], (b) => sent.push(b.toString("hex")), new AbortController().signal);
+    expect(res2?.ok).toBe(false);
+  });
+
+  it("buildSteps('open_inn') tạo chuỗi bước di chuyển tới map 12007 và mở Nhà Trọ chuẩn PCAP", () => {
+    const steps = buildSteps("open_inn", {}, { map: 12001 });
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "move" && st.cmd.args[0] === "350" && st.cmd.args[1] === "450")).toBe(true);
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "interact_prep" && st.cmd.args[0] === "8")).toBe(true);
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "talk_npc" && st.cmd.args[0] === "1")).toBe(true);
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "send_menu" && st.cmd.args[0] === "32")).toBe(true);
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "open_inn_request")).toBe(true);
+    expect(steps.some((st) => "cmd" in st && st.cmd.name === "escort_query")).toBe(true);
   });
 });
 

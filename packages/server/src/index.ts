@@ -3,7 +3,7 @@ import { join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { EngineError, codecs, drivers, listLiveActions, parse } from "@tsbot/engine";
-import type { Account, BattleConfig, ChaseConfig, ClientMessage, DungeonSoloConfig, DungeonTeamConfig, PartyConfig, DispatchBody, LoginBody, RunQueueBody, RunScriptBody, SessionLoginBody, SessionLoginResult, ScriptControl, ServerMessage, Settings } from "@tsbot/protocol";
+import type { Account, BattleConfig, ChaseConfig, ClientMessage, DungeonSoloConfig, DungeonTeamConfig, EscortConfig, PartyConfig, DispatchBody, LoginBody, RunQueueBody, RunScriptBody, SessionLoginBody, SessionLoginResult, ScriptControl, ServerMessage, Settings, WorldBossConfig } from "@tsbot/protocol";
 import Fastify from "fastify";
 import type { WebSocket } from "ws";
 import { CUSTOM_SCRIPTS_DIR, ROOT } from "./services/paths";
@@ -411,6 +411,53 @@ app.post<{ Params: { id: string } }>("/api/accounts/:id/dungeon-solo/exit", asyn
   const r = await connections.dungeonSolo.exitDungeon(req.params.id);
   return r.ok ? r : reply.code(409).send({ error: r.message });
 });
+app.post<{ Params: { id: string }; Body: { dungeonId?: number } }>("/api/accounts/:id/dungeon-solo/buy", async (req, reply) => {
+  const r = await connections.dungeonSolo.buySolo(req.params.id, req.body?.dungeonId);
+  return r.ok ? r : reply.code(409).send({ error: r.message });
+});
+
+// Cấu hình & điều phối săn Boss Thế Giới (phân lập canonicalKey).
+app.get<{ Params: { id: string } }>("/api/accounts/:id/world-boss-config", async (req) => connections.worldBossConfigs.get(req.params.id));
+app.put<{ Params: { id: string }; Body: Partial<WorldBossConfig> }>("/api/accounts/:id/world-boss-config", async (req) => {
+  return connections.worldBossConfigs.set(req.params.id, req.body ?? {});
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/world-boss/start", async (req, reply) => {
+  const r = connections.worldBoss.startBoss(req.params.id);
+  return r.ok ? r : reply.code(409).send({ error: r.message });
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/world-boss/stop", async (req) => connections.worldBoss.stopBoss(req.params.id));
+
+// Daily Checklist (Nhiệm vụ ngày, reset 00:00 TW - UTC+8, phân lập canonicalKey).
+app.get<{ Params: { id: string } }>("/api/accounts/:id/daily-checklist", async (req) => connections.dailyChecklist.get(req.params.id));
+app.post<{ Params: { id: string }; Body: { key: string } }>("/api/accounts/:id/daily-checklist/toggle", async (req, reply) => {
+  if (!req.body?.key) return reply.code(400).send({ error: "Thiếu key mục checklist" });
+  const updated = connections.dailyChecklist.toggle(req.params.id, req.body.key);
+  connections.pushCharacter(req.params.id);
+  return updated;
+});
+app.post<{ Params: { id: string }; Body: { key: string; count?: number } }>("/api/accounts/:id/daily-checklist/progress", async (req, reply) => {
+  if (!req.body?.key) return reply.code(400).send({ error: "Thiếu key mục checklist" });
+  const updated = connections.dailyChecklist.recordProgress(req.params.id, req.body.key, req.body.count ?? 1);
+  connections.pushCharacter(req.params.id);
+  return updated;
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/friend-gift", async (req) => {
+  return connections.dispatch(req.params.id, "friend_gift_all");
+});
+
+// Escort & Pet Inn (Vận tiêu & Nhà trọ, phân lập canonicalKey)
+app.get<{ Params: { id: string } }>("/api/accounts/:id/escort-config", async (req) => connections.escortConfigs.get(req.params.id));
+app.put<{ Params: { id: string }; Body: Partial<EscortConfig> }>("/api/accounts/:id/escort-config", async (req) => {
+  return connections.escortConfigs.set(req.params.id, req.body ?? {});
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/escort/run", async (req, reply) => {
+  const r = await connections.escort.triggerFor(req.params.id);
+  return r.ok ? r : reply.code(400).send({ error: r.message });
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/open-inn", async (req, reply) => {
+  const r = await connections.escort.openInn(req.params.id);
+  return r.ok ? r : reply.code(400).send({ error: r.message });
+});
 
 // Servers (danh sách cho dropdown)
 app.get("/api/servers", async () => servers.list());
@@ -471,5 +518,7 @@ process.on("SIGTERM", shutdown);
 connections.party.start();
 connections.dungeonTeam.start();
 connections.dungeonSolo.start();
+connections.worldBoss.start();
+connections.escort.start();
 await app.listen({ port: PORT, host: HOST });
 console.log(`TS-Bot-Web engine: http://${HOST}:${PORT}  (dev UI: http://localhost:5173)`);

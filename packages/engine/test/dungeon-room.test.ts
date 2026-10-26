@@ -384,6 +384,42 @@ describe("trận đội 5 người — mỗi client chỉ ra lệnh cho đơn v�
     s.onData(encodeFrame(Buffer.from([0, 0, 0x34, 0x01, 0])));
     const actions = sent.filter((b) => (b[6]! ^ 0xad) === 0x32 && (b[7]! ^ 0xad) === 0x01);
     expect(actions).toHaveLength(1); // chỉ nhân vật
+    // Kiểm tra chính xác toạ độ actor: (3, 0) — không chạm vào (3, 2) của chủ pt
+    const rawAction = Buffer.from(actions[0]!.map((b) => b ^ 0xad));
+    expect(rawAction[9]).toBe(3); // row
+    expect(rawAction[10]).toBe(0); // col
+  });
+
+  it("thành viên có võ tướng trong trận (Teemo_01 @ slot 4): gửi 2 lệnh ở đúng cột (3,4) và (2,4), không chạm vào cột 2 của chủ PT", () => {
+    const sent: Buffer[] = [];
+    const s = tsOnlineCodec.create({ log: () => {}, game: () => {}, send: (b: Buffer) => sent.push(b), patchState: () => {} } as never);
+    // Teemo_01 có uid = 8ede67d3aca80a00
+    (s as unknown as { uid: Buffer }).uid = Buffer.from("8ede67d3aca80a00", "hex");
+    for (const h of bf.spawn_frames_decoded) s.onData(wire(h));
+    s.onData(encodeFrame(Buffer.from([0, 0, 0x34, 0x01, 0])));
+    const actions = sent.filter((b) => (b[6]! ^ 0xad) === 0x32 && (b[7]! ^ 0xad) === 0x01);
+    expect(actions).toHaveLength(2); // 1 nhân vật + 1 võ tướng
+    const actChar = Buffer.from(actions[0]!.map((b) => b ^ 0xad));
+    const actPet = Buffer.from(actions[1]!.map((b) => b ^ 0xad));
+    expect(actChar[9]).toBe(3); // row master
+    expect(actChar[10]).toBe(4); // col master (cột 4, không phải cột 2)
+    expect(actPet[9]).toBe(2); // row pet
+    expect(actPet[10]).toBe(4); // col pet (cùng cột 4 với master, không cướp cột 2 của chủ PT)
+  });
+
+  it("thành viên không có võ tướng trong trận dù roster có pet: không gửi lệnh cho (2, 2) hay bất kỳ võ tướng nào", () => {
+    const sent: Buffer[] = [];
+    const s = tsOnlineCodec.create({ log: () => {}, game: () => {}, send: (b: Buffer) => sent.push(b), patchState: () => {} } as never);
+    (s as unknown as { uid: Buffer }).uid = Buffer.from(bf.self_uid, "hex");
+    // Giả lập roster có pet active nhưng pet không ở trong trận
+    (s as unknown as { roster: any[] }).roster = [{ idx: 0, model: 45437, hp: 1000, maxHp: 1000, sp: 200, maxSp: 200 }];
+    for (const h of bf.spawn_frames_decoded) s.onData(wire(h));
+    s.onData(encodeFrame(Buffer.from([0, 0, 0x34, 0x01, 0])));
+    const actions = sent.filter((b) => (b[6]! ^ 0xad) === 0x32 && (b[7]! ^ 0xad) === 0x01);
+    expect(actions).toHaveLength(1); // Tuyệt đối chỉ gửi 1 lệnh cho nhân vật
+    const rawAction = Buffer.from(actions[0]!.map((b) => b ^ 0xad));
+    expect(rawAction[9]).toBe(3);
+    expect(rawAction[10]).toBe(0);
   });
 });
 
@@ -625,5 +661,33 @@ describe("Ngày Tàn Hoạn Quan (pcap phobandoi_02_chupt_hoantat)", () => {
     const f = Buffer.concat([Buffer.alloc(6), Buffer.from([0x2f, 0x0c]), Buffer.from("00000e0003 4ab70a00".replace(/ /g, ""), "hex")]);
     expect(t.onPacket(0x0c, f)).toBe(true);
     expect(t.state.status).toBe("completed");
+  });
+
+  it("dungeon_buy gửi đúng gói hỏi giá 54/01 và mua 54/02 ưu đãi 0x000d cho mã phó bản", async () => {
+    const sent: Buffer[] = [];
+    const logs: string[] = [];
+    const s = tsOnlineCodec.create({
+      log: () => {},
+      game: (m: string) => logs.push(m),
+      send: (b: Buffer) => sent.push(b),
+      patchState: () => {},
+    } as never);
+
+    const res = await s.executeAction!("dungeon_buy", ["4"], (b) => sent.push(b), new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: "Đã mua thêm lượt phó bản #4" });
+
+    // Frame 1: 54/01 [00 0d 00 04 00]
+    // Frame 2: 54/02 [00 02 0d 00 04 00]
+    const hex = (b: Buffer) => b.toString("hex");
+    const hx = sent.map(hex);
+    // XOR decode để check nội dung
+    const dec = sent.map((b) => Buffer.from(b.map((x) => x ^ 0xad)));
+    // Header 6 bytes + cmd 54 + sub 01 + payload 00 0d 00 04 00
+    expect(dec[0]?.subarray(6)).toEqual(Buffer.from([0x54, 0x01, 0x00, 0x0d, 0x00, 0x04, 0x00]));
+    expect(dec[1]?.subarray(6)).toEqual(Buffer.from([0x54, 0x02, 0x00, 0x02, 0x0d, 0x00, 0x04, 0x00]));
+
+    // Server phản hồi 54/02 thành công
+    s.onData(frame(0x54, 0x02, "000d0001"));
+    expect(logs.some((l) => l.includes("Mua thêm lượt phó bản thành công (-10 Vàng)"))).toBe(true);
   });
 });

@@ -378,7 +378,10 @@ export function BattlePanel({
     const pSk = ch.playerSkills?.find((s) => s.id === sid);
     if (pSk) return pSk.name;
     const petSk = ch.petSkills?.find((s) => s.id === sid);
-    if (petSk) return petSk.name;
+    if (petSk) {
+      const tag = petSk.type === "exclusive_weapon" ? " [VKCD]" : petSk.type === "awakened" ? " [Mê]" : "";
+      return `${petSk.name}${tag}`;
+    }
     return `Skill ${sid}`;
   };
 
@@ -618,12 +621,32 @@ export function BattlePanel({
         </optgroup>
         {skills.length > 0 && (
           <optgroup label={isPlayer ? "Kỹ năng nhân vật" : "Kỹ năng võ tướng"}>
-            {skills.map((sk) => (
-              <option key={sk.id} value={sk.id}>
-                {isPlayer ? "⚡" : "✨"} {sk.name} {sk.level ? `(Lv ${sk.level})` : ""}{" "}
-                {sk.sp ? `[${sk.sp} SP]` : ""}
-              </option>
-            ))}
+            {skills.map((sk) => {
+              const icon = isPlayer
+                ? "⚡"
+                : sk.type === "exclusive_weapon"
+                ? "🗡️"
+                : sk.type === "awakened"
+                ? "🌟"
+                : "✨";
+              const tag = sk.type === "exclusive_weapon"
+                ? " [VKCD]"
+                : sk.type === "awakened"
+                ? " [Mê]"
+                : "";
+              const statusNote = sk.enabled === false ? ` (${sk.disabledReason ?? "Chưa mở"})` : "";
+              return (
+                <option
+                  key={sk.id}
+                  value={sk.id}
+                  disabled={sk.enabled === false}
+                  style={{ color: sk.enabled === false ? "var(--muted, #888)" : undefined }}
+                >
+                  {icon} {sk.name}{tag} {sk.level ? `(Lv ${sk.level})` : ""}{" "}
+                  {sk.sp ? `[${sk.sp} SP]` : ""}{statusNote}
+                </option>
+              );
+            })}
           </optgroup>
         )}
       </select>

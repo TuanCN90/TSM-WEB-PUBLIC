@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { DailyChecklistModal } from "./components/DailyChecklistModal";
 import { TaiwanClock } from "./components/TaiwanClock";
 import { useLive } from "./live";
 import { Console } from "./pages/Console";
@@ -24,6 +25,7 @@ export function App() {
   const { sessions, add, loginAll, loggingAll, loginProgress, offlineTargets, logoutAll, loggingOutAll, onlineCount } = useSessions();
   const toast = useToast();
   const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
+  const [showDailyChecklist, setShowDailyChecklist] = useState(false);
   const full = sessions.length >= MAX_SESSIONS;
   const addAccount = () => {
     if (!add()) { toast("error", LIMIT_MSG); return; }
@@ -75,6 +77,28 @@ export function App() {
         <div className="status">
           {!connected && <span className="wsdown" title="Mất kết nối tới backend — dữ liệu trên màn hình có thể đã cũ"><span className="dot bad" />Mất kết nối server</span>}
           <TaiwanClock />
+          <button
+            type="button"
+            className="btn-checklist-daily"
+            title="Xem danh sách nhiệm vụ ngày và tiến độ hoàn thành (Reset 00:00 TW)"
+            onClick={() => setShowDailyChecklist(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "5px 11px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 6,
+              background: "rgba(245, 158, 11, 0.15)",
+              color: "#f59e0b",
+              border: "1px solid rgba(245, 158, 11, 0.35)",
+              cursor: "pointer",
+            }}
+          >
+            <span>📋</span>
+            <span>Checklist Daily</span>
+          </button>
           <button
             type="button"
             className="btn-login-all"
@@ -178,6 +202,10 @@ export function App() {
           onCancel={() => setConfirmLogoutAll(false)}
         />
       )}
+      <DailyChecklistModal
+        open={showDailyChecklist}
+        onClose={() => setShowDailyChecklist(false)}
+      />
     </div>
   );
 }

@@ -95,6 +95,11 @@ export class PartyService {
 
   /** Tài khoản này đang là chủ PT với kế hoạch bật? (dùng để quyết định mirror/gather) */
   isActiveLeader(accountId: string): boolean {
+    const leaderConn = this.host.entries().find(([id]) => canon(id) === canon(accountId))?.[1];
+    const lch = leaderConn?.character();
+    if (lch?.dungeonSolo && lch.dungeonSolo.phase !== "idle" && lch.dungeonSolo.phase !== "done" && lch.dungeonSolo.phase !== "error") {
+      return false;
+    }
     const cfg = this.store.get(accountId);
     return cfg.enabled && cfg.role === "leader" && cfg.members.length > 0;
   }
@@ -150,6 +155,14 @@ export class PartyService {
           this.rt.set(key, rt);
         }
         try {
+          const ch = o.conn.character();
+          // Nếu tài khoản đang chạy phó bản đơn -> tạm bỏ qua lập đội, gỡ chốt chặn partyGate
+          const inSolo = ch?.dungeonSolo && ch.dungeonSolo.phase !== "idle" && ch.dungeonSolo.phase !== "done" && ch.dungeonSolo.phase !== "error";
+          if (inSolo) {
+            o.conn.partyGate = undefined;
+            continue;
+          }
+
           if (!cfg.enabled) {
             this.setPlan(o.id, rt, undefined, cfg);
             o.conn.partyGate = undefined;
@@ -406,12 +419,19 @@ export class PartyService {
    * Hết GATHER_TIMEOUT_MS ⇒ trả ok=false để dừng chuỗi warp (đi bộ thiếu đội dễ thua trận NPC chặn cổng).
    */
   async gather(accountId: string, reason: string, signal: AbortSignal): Promise<{ ok: boolean; message?: string }> {
+    const leaderConn = this.host.entries().find(([id]) => canon(id) === canon(accountId))?.[1];
+    if (!leaderConn) return { ok: true };
+    const lch = leaderConn.character();
+    // Bỏ qua chờ đội ngũ nếu đang trong phó bản đơn
+    if (lch?.dungeonSolo && lch.dungeonSolo.phase !== "idle" && lch.dungeonSolo.phase !== "done" && lch.dungeonSolo.phase !== "error") {
+      leaderConn.partyGate = undefined;
+      return { ok: true };
+    }
+
     const cfg = this.store.get(accountId);
     if (!(cfg.enabled && cfg.role === "leader" && cfg.members.length > 0)) return { ok: true };
     const key = canon(accountId);
     const rt = this.rt.get(key);
-    const leaderConn = this.host.entries().find(([id]) => canon(id) === key)?.[1];
-    if (!leaderConn) return { ok: true };
     const started = Date.now();
     let lastMsg = "";
     if (rt) { rt.gathering = true; this.host.pushCharacter(accountId); }

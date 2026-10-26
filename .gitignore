@@ -4,7 +4,7 @@ data/logs
 .DS_Store
 .nuget
 
-# BẢO MẬT: Tuyệt đối không commit dữ liệu tài khoản & cấu hình cá nhân lên repo
+# BẢO MẬT: Không commit thông tin tài khoản cá nhân
 data/accounts.json
 data/battle-configs.json
 data/chase-configs.json
@@ -13,3 +13,8 @@ data/dungeon-team-configs.json
 data/item-lists.json
 data/last-closed.json
 data/party-configs.json
+data/escort-configs.json
+data/daily-checklist.json
+data/world-boss-configs.json
+
+

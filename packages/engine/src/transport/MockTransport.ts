@@ -267,6 +267,42 @@ export class MockTransport implements Transport {
         this.emit({ bank });
         break;
       }
+      case "open_inn": {
+        this.loc({ map: 12007, x: 350, y: 450 });
+        const innPets = this.state.innPets && this.state.innPets.length > 0 ? this.state.innPets : [
+          { slot: 1, model: 14101, name: "Thái Văn Cơ", level: 1, exp: 6, hp: 205, status: 0 },
+        ];
+        this.emit({ innPets });
+        break;
+      }
+      case "escort_start": {
+        const slot = Number(cmd.args[0]) || 1;
+        const innPets = (this.state.innPets || []).map((p) => (p.slot === slot ? { ...p, status: 1 } : p));
+        const now = Date.now();
+        const activeEscort = {
+          slot,
+          petName: innPets.find((p) => p.slot === slot)?.name,
+          startTime: now,
+          endTime: now + 4 * 3600 * 1000,
+          durationHours: 4,
+        };
+        const curCount = this.state.escort?.dailyCount ?? 0;
+        this.emit({
+          innPets,
+          escort: {
+            phase: "escorting",
+            dailyCount: Math.min(3, curCount + 1),
+            maxDailyCount: 3,
+            activeEscort,
+            message: `Võ tướng ô ${slot} đang vận tiêu`,
+            updatedAt: now,
+          },
+        });
+        break;
+      }
+      case "escort_query": {
+        break;
+      }
       case "warp_to_spot": {
         const targetMap = cmd.name === "warp_to_spot" ? (n[0] || this.state.location.map) : this.state.location.map;
         const targetX = cmd.name === "warp_to_spot" ? (n[1] || 0) : (n[0] || 0);
@@ -301,6 +337,7 @@ export class MockTransport implements Transport {
       case "shop_sell_and_buy":
       case "execute_shop_transaction":
       case "dungeon":
+      case "dungeon_buy":
         break;
       case "dungeon_room_create":
         this.emit({ dungeonRoom: { status: "open", roomId: 101, ready: true } });

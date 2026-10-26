@@ -253,6 +253,9 @@ export function Home({ session }: { session: Session }) {
               <button className="iconbtn" data-tip="General" aria-label="General" disabled={!online} onClick={() => setGenOpen(true)}>🧰</button>
               <button className="iconbtn" data-tip="Điểm danh ngày" aria-label="Điểm danh ngày" disabled={!can} onClick={() => act("daily_checkin")}>📅</button>
               <button className="iconbtn" data-tip="Nhận quà Online" aria-label="Nhận quà Online" disabled={!can} onClick={() => act("online_reward_all")}>🎁</button>
+              <button className="iconbtn" data-tip="Tặng & Nhận quà bạn bè" aria-label="Tặng & Nhận quà bạn bè" disabled={!can} onClick={() => act("friend_gift_all")}>🤝</button>
+              <button className="iconbtn" data-tip="Rút 1 bí cấp tướng (9.000 Xu)" aria-label="Rút 1 bí cấp tướng" disabled={!can} onClick={() => act("pull_secret")}>📜</button>
+              <button className="iconbtn" data-tip="Rút 1 thẻ tướng (9.000 Xu)" aria-label="Rút 1 thẻ tướng" disabled={!can} onClick={() => act("pull_card")}>🃏</button>
             </section>
           </div>
 
@@ -609,7 +612,7 @@ export function Home({ session }: { session: Session }) {
 
       {tab === "pet" && (
         <div className={`pet-tab-wrapper ${online ? "" : "stale"}`} style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <PetPanel can={can} pets={ch.pets ?? []} ch={ch} act={act} />
+          <PetPanel can={can} pets={ch.pets ?? []} ch={ch} act={act} accountId={selected || session.username || "default"} />
         </div>
       )}
 

@@ -52,7 +52,7 @@ export function ScriptsHub() {
           className={`home-tab ${subTab === "dungeon-solo" ? "on" : ""}`}
           onClick={() => selectTab("dungeon-solo")}
         >
-          <span>⚔️</span> Phó bản đơn
+          <span>⚔️</span> Phó bản đơn & Boss TG
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { ITEM_LIST_KEYS } from "@tsbot/protocol";
-import type { Account, AutoHealConfig, AutoHealTargetConfig, BattleConfig, BuySettings, ChaseConfig, DungeonSoloConfig, DungeonTeamConfig, ItemListKey, PartyConfig, ItemLists, ScriptFile, ScriptMeta, Settings } from "@tsbot/protocol";
+import { DAILY_CHECKLIST_CATALOG, getTaiwanDateKey, ITEM_LIST_KEYS } from "@tsbot/protocol";
+import type { Account, AutoHealConfig, AutoHealTargetConfig, BattleConfig, BuySettings, ChaseConfig, DailyChecklistState, DungeonSoloConfig, DungeonTeamConfig, EscortConfig, ItemListKey, PartyConfig, ItemLists, ScriptFile, ScriptMeta, Settings, WorldBossConfig } from "@tsbot/protocol";
 import { DATA_DIR, SCRIPTS_DIR } from "./paths";
 
 /* ---------- Script store: file .ini nguyên bản, 2 chiều với tool cũ ---------- */
@@ -86,8 +86,11 @@ export class RunnableRegistry {
 class JsonFile<T> {
   private file: string;
   constructor(name: string, private fallback: T) {
-    mkdirSync(DATA_DIR, { recursive: true });
-    this.file = join(DATA_DIR, name);
+    const baseDir = (process.env.DATA_DIR || process.env.TSBOT_DATA_DIR)
+      ? resolve(process.env.DATA_DIR || process.env.TSBOT_DATA_DIR!)
+      : DATA_DIR;
+    mkdirSync(baseDir, { recursive: true });
+    this.file = join(baseDir, name);
   }
   read(): T {
     try {
@@ -626,7 +629,7 @@ export class DungeonSoloConfigStore {
   }
 
   static empty(): DungeonSoloConfig {
-    return { enabled: false, type: "all", bracket: 0, leaveParty: true };
+    return { enabled: false, type: "all", bracket: 0, leaveParty: true, attempts: 1, autoBuyAttempts: false };
   }
 
   get(accountId: string): DungeonSoloConfig {
@@ -652,12 +655,211 @@ export class DungeonSoloConfigStore {
     const type = validTypes.has(c.type as string) ? (c.type as DungeonSoloConfig["type"]) : d.type;
     const bracketNum = Number(c.bracket);
     const bracket = Number.isInteger(bracketNum) && bracketNum >= 0 && bracketNum <= 4 ? bracketNum : 0;
+    const attempts = c.attempts === 2 ? 2 : 1;
+    const autoBuyAttempts = !!c.autoBuyAttempts;
     return {
       enabled: !!c.enabled,
       type,
       bracket,
       leaveParty: c.leaveParty === undefined ? d.leaveParty : !!c.leaveParty,
+      attempts,
+      autoBuyAttempts,
     };
   }
 }
+
+export class WorldBossConfigStore {
+  private f = new JsonFile<Record<string, WorldBossConfig>>("world-boss-configs.json", {});
+
+  canonicalKey(accountId: string): string {
+    const raw = (accountId ?? "").trim();
+    if (!raw) return "default";
+    const at = raw.indexOf("@");
+    return (at > 0 ? raw.slice(0, at) : raw).toLowerCase();
+  }
+
+  static empty(): WorldBossConfig {
+    return {
+      enabled: false,
+      attempts: 7,
+      autoRevive: true,
+      useTickets: true,
+      returnToTrain: true,
+    };
+  }
+
+  get(accountId: string): WorldBossConfig {
+    const all = this.f.read();
+    return WorldBossConfigStore.sanitize(all[this.canonicalKey(accountId)] ?? WorldBossConfigStore.empty());
+  }
+
+  all(): Record<string, WorldBossConfig> {
+    const out: Record<string, WorldBossConfig> = {};
+    for (const [k, v] of Object.entries(this.f.read())) out[k] = WorldBossConfigStore.sanitize(v);
+    return out;
+  }
+
+  set(accountId: string, patch: Partial<WorldBossConfig>): WorldBossConfig {
+    const next = WorldBossConfigStore.sanitize({ ...this.get(accountId), ...patch });
+    this.f.write({ ...this.f.read(), [this.canonicalKey(accountId)]: next });
+    return next;
+  }
+
+  static sanitize(c: Partial<WorldBossConfig>): WorldBossConfig {
+    const d = WorldBossConfigStore.empty();
+    const attempts = Number.isInteger(Number(c.attempts)) && Number(c.attempts) >= 1 && Number(c.attempts) <= 7 ? Number(c.attempts) : d.attempts;
+    return {
+      enabled: !!c.enabled,
+      attempts,
+      bossPetId: typeof c.bossPetId === "number" ? c.bossPetId : undefined,
+      bossPetWeapon: typeof c.bossPetWeapon === "number" ? c.bossPetWeapon : undefined,
+      autoRevive: c.autoRevive === undefined ? d.autoRevive : !!c.autoRevive,
+      useTickets: c.useTickets === undefined ? d.useTickets : !!c.useTickets,
+      returnToTrain: c.returnToTrain === undefined ? d.returnToTrain : !!c.returnToTrain,
+    };
+  }
+}
+
+/* ---------- Daily Checklist Store: Lưu theo tài khoản, reset 00:00 TW (UTC+8) ---------- */
+export class DailyChecklistStore {
+  private f: JsonFile<Record<string, DailyChecklistState>>;
+
+  constructor(fileName = "daily-checklist.json") {
+    this.f = new JsonFile(fileName, {});
+  }
+
+  private canonicalKey(accountId: string): string {
+    const raw = (accountId ?? "").trim();
+    if (!raw) return "default";
+    const at = raw.indexOf("@");
+    return (at > 0 ? raw.slice(0, at) : raw).toLowerCase();
+  }
+
+  static empty(): DailyChecklistState {
+    const items: DailyChecklistState["items"] = {};
+    for (const def of DAILY_CHECKLIST_CATALOG) {
+      items[def.key] = { currentCount: 0, done: false };
+    }
+    return {
+      dateKey: getTaiwanDateKey(),
+      items,
+    };
+  }
+
+  get(accountId: string): DailyChecklistState {
+    const all = this.f.read();
+    const key = this.canonicalKey(accountId);
+    const today = getTaiwanDateKey();
+    let current = all[key];
+
+    // Reset nếu chưa có dữ liệu hoặc đã qua ngày mới theo giờ Đài Loan (UTC+8)
+    if (!current || current.dateKey !== today) {
+      current = DailyChecklistStore.empty();
+      current.dateKey = today;
+      this.f.write({ ...all, [key]: current });
+      return current;
+    }
+
+    // Đảm bảo đủ các key trong CATALOG
+    let changed = false;
+    current.items = current.items || {};
+    for (const def of DAILY_CHECKLIST_CATALOG) {
+      if (!current.items[def.key]) {
+        current.items[def.key] = { currentCount: 0, done: false };
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.f.write({ ...all, [key]: current });
+    }
+    return current;
+  }
+
+  recordProgress(accountId: string, itemKey: string, addCount = 1): DailyChecklistState {
+    const cur = this.get(accountId);
+    const def = DAILY_CHECKLIST_CATALOG.find((d) => d.key === itemKey);
+    const maxCount = def?.maxCount ?? 1;
+
+    const existing = cur.items[itemKey] || { currentCount: 0, done: false };
+    const nextCount = Math.min(maxCount, existing.currentCount + addCount);
+    cur.items[itemKey] = {
+      currentCount: nextCount,
+      done: nextCount >= maxCount,
+      updatedAt: Date.now(),
+    };
+
+    const all = this.f.read();
+    this.f.write({ ...all, [this.canonicalKey(accountId)]: cur });
+    return cur;
+  }
+
+  toggle(accountId: string, itemKey: string): DailyChecklistState {
+    const cur = this.get(accountId);
+    const def = DAILY_CHECKLIST_CATALOG.find((d) => d.key === itemKey);
+    const maxCount = def?.maxCount ?? 1;
+
+    const existing = cur.items[itemKey] || { currentCount: 0, done: false };
+    if (existing.done) {
+      cur.items[itemKey] = { currentCount: 0, done: false, updatedAt: Date.now() };
+    } else {
+      cur.items[itemKey] = { currentCount: maxCount, done: true, updatedAt: Date.now() };
+    }
+
+    const all = this.f.read();
+    this.f.write({ ...all, [this.canonicalKey(accountId)]: cur });
+    return cur;
+  }
+}
+
+/**
+ * Cấu hình VẬN TIÊU (data/escort-configs.json), phân lập bằng canonicalKey (AGENTS.md §2).
+ */
+export class EscortConfigStore {
+  private f = new JsonFile<Record<string, EscortConfig>>("escort-configs.json", {});
+
+  canonicalKey(accountId: string): string {
+    const raw = (accountId ?? "").trim();
+    if (!raw) return "default";
+    const at = raw.indexOf("@");
+    return (at > 0 ? raw.slice(0, at) : raw).toLowerCase();
+  }
+
+  static empty(): EscortConfig {
+    return {
+      enabled: false,
+      selectedPetSlot: 1,
+      selectedPetName: "",
+      autoClaimReward: true,
+    };
+  }
+
+  get(accountId: string): EscortConfig {
+    const all = this.f.read();
+    return EscortConfigStore.sanitize(all[this.canonicalKey(accountId)] ?? EscortConfigStore.empty());
+  }
+
+  all(): Record<string, EscortConfig> {
+    const out: Record<string, EscortConfig> = {};
+    for (const [k, v] of Object.entries(this.f.read())) out[k] = EscortConfigStore.sanitize(v);
+    return out;
+  }
+
+  set(accountId: string, patch: Partial<EscortConfig>): EscortConfig {
+    const next = EscortConfigStore.sanitize({ ...this.get(accountId), ...patch });
+    this.f.write({ ...this.f.read(), [this.canonicalKey(accountId)]: next });
+    return next;
+  }
+
+  static sanitize(c: Partial<EscortConfig>): EscortConfig {
+    const d = EscortConfigStore.empty();
+    return {
+      enabled: Boolean(c.enabled),
+      selectedPetSlot: typeof c.selectedPetSlot === "number" && c.selectedPetSlot > 0 ? c.selectedPetSlot : d.selectedPetSlot,
+      selectedPetName: typeof c.selectedPetName === "string" ? c.selectedPetName : d.selectedPetName,
+      autoClaimReward: c.autoClaimReward !== undefined ? Boolean(c.autoClaimReward) : d.autoClaimReward,
+    };
+  }
+}
+
+
 
