@@ -203,6 +203,7 @@ export function InventoryPanel({
         buyHpQty: String(buyHpQty),
         buySpEnabled: buySpEnabled ? "1" : "0",
         buySpQty: String(buySpQty),
+        sellIdsJson: JSON.stringify(lists?.sell ?? []),
       });
       toast("info", "Đang tự động di chuyển đến Hương Dũng để Bán & Mua HP/SP. Theo dõi tiến trình tại tab Sự kiện!");
     } catch (e) {

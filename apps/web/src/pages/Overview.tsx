@@ -93,15 +93,16 @@ const FEATURES: Feature[] = [
     icon: "⚔️",
     name: "Trận đấu tự động",
     tone: "rose",
-    summary: "Theo dõi và tự điều khiển trận đấu theo lượt ngay trên web.",
+    summary: "Theo dõi và tự điều khiển trận đấu theo lượt, tự chọn mục tiêu F1 thông minh và log chi tiết.",
     logic: [
       "Hiển thị đội hình hai bên, HP/SP và log lượt theo thời gian thực.",
-      "Phân tích toàn bộ action blocks trong gói 32/01, ghi nhận chính xác 100% combo nhiều thành viên/pet cùng lúc kèm toạ độ và sát thương chi tiết.",
+      "Phân tích toàn bộ action blocks và đa mục tiêu trong gói 32/01, ghi nhận chính xác 100% combo và đòn đánh AOE (Loạn Kích, Cuồng Phong...) cho từng quái bị trúng đòn.",
+      "Cơ chế F1 thông minh: tính toán tâm chấn để kỹ năng lan quét trúng tối đa quái còn sống (tâm cụm quái), kết thúc trận nhanh nhất.",
       "Tự đánh theo kỹ năng đã chọn, có chế độ tự bỏ chạy và giới hạn số lượt.",
     ],
     rules: [
       "Chỉ ra lệnh cho đơn vị của chính tài khoản mình (không điều khiển thú của người khác).",
-      "Gom và hiển thị đầy đủ tất cả thành viên tham gia combo theo đúng mục tiêu.",
+      "Gom và hiển thị đầy đủ tất cả thành viên tham gia combo và toàn bộ quái trúng chiêu lan.",
       "Trận đấu là tab cố định, không phải popup.",
     ],
   },
@@ -247,9 +248,15 @@ const FEATURES: Feature[] = [
     icon: "💊",
     name: "Mua/Bán & Tự dùng HP/SP",
     tone: "green",
-    summary: "Mua bán thuốc HP/SP và tự dùng khi thấp.",
-    logic: ["Mua/bán vật phẩm HP/SP tại NPC theo số lượng chọn.", "Tự dùng khi HP/SP xuống dưới ngưỡng đã đặt."],
-    rules: ["Ngưỡng và số lượng cấu hình riêng cho từng tài khoản."],
+    summary: "Quy trình Bán trước Mua sau tại NPC Hương Dũng và tự dùng HP/SP.",
+    logic: [
+      "Quy trình 'Bán xong rồi mua' tự dịch chuyển đến NPC Thương nhân Hương Dũng (12701), đồng bộ danh sách bán tức thời và bán vật phẩm trong túi đồ trước khi mua HP/SP.",
+      "Tự động dùng vật phẩm HP/SP trong túi đồ khi máu/SP nhân vật hoặc võ tướng xuống dưới ngưỡng đã đặt.",
+    ],
+    rules: [
+      "Ngưỡng và số lượng cấu hình riêng biệt 100% cho từng tài khoản.",
+      "Nếu túi đồ không có vật phẩm khớp danh sách bán (hoặc chưa chọn món), bot thông báo rõ ràng ra bảng Sự kiện và chuyển sang bước mua HP/SP an toàn.",
+    ],
   },
   {
     id: "events",

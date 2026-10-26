@@ -712,7 +712,7 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
       const logs: string[] = [];
       const s = tsOnlineCodec.create({ log(_lvl: string, m: string) { logs.push(m); }, game: (m: string) => games.push(m), send: (b: Buffer) => sent.push(b), patchState() {} } as never);
 
-      // Thùng đồ có ô 1: item 51504 (như tài khoản user_test_01)
+      // Thùng đồ có ô 1: item 51504 (như tài khoản tuancn11)
       const payload = Buffer.alloc(4 + 1 * 36);
       payload.writeUInt16LE(1, 2);
       payload[4] = 1;

@@ -9,13 +9,14 @@ const frame = (cmd: number, sub: number, payloadHex: string) => encodeFrame(Buff
 function session() {
   const state: Record<string, any> = {};
   const gameLogs: string[] = [];
+  const sent: Buffer[] = [];
   const s = tsOnlineCodec.create({
     log() {},
     game(m: string) { gameLogs.push(m); },
-    send() {},
+    send(buf: Buffer) { sent.push(buf); },
     patchState: (p: Record<string, any>) => { Object.assign(state, p); },
   } as never);
-  return { s, state, gameLogs };
+  return { s, state, gameLogs, sent };
 }
 
 describe("Võ tướng xuất chiến (0f/08 + 13/04)", () => {
@@ -266,5 +267,84 @@ describe("Võ tướng xuất chiến (0f/08 + 13/04)", () => {
     expect(comboLog).toContain("---- Ma Quan Vũ (2,1) dùng [Đấu Vật] - 431 HP");
     expect(comboLog).toContain("---- Ma Quan Vũ (2,0) dùng [Đấu Vật] - 446 HP");
     expect(comboLog).toContain("còn lại 0/181 HP (Gục ngã)");
+  });
+
+  it("cơ chế F1 thông minh: chọn mục tiêu (0, 3) khi quái đứng ở (0, 2), (0, 3), (0, 4) để kỹ năng lan quét trúng cả 3", () => {
+    const { s, sent } = session();
+    s.onData(frame(0x0f, 0x08, fx.mqv_0f08));
+    s.onData(frame(0x13, 0x04, fx.mqv_1304));
+    s.onData(frame(0x14, 0x0c, ""));
+
+    // Spawn 3 quái tại (0, 2), (0, 3), (0, 4)
+    for (const c of [2, 3, 4]) {
+      const p = Buffer.alloc(45);
+      p.writeUInt16LE(10201, 11 - 8);
+      p[29 - 8] = 0; p[30 - 8] = c;
+      p.writeUInt32LE(181, 31 - 8);
+      p.writeUInt32LE(100, 35 - 8);
+      p.writeUInt32LE(181, 39 - 8);
+      p.writeUInt32LE(100, 43 - 8);
+      p[47 - 8] = 30;
+      s.onData(frame(0x0b, 0x05, p.toString("hex")));
+    }
+
+    // Cài đặt F1 và đến lượt đánh 34/01
+    s.encodeAction("set_battle_config", ["10000", "13013", "1", "F1", "F1"]);
+    s.onData(frame(0x34, 0x01, "00"));
+
+    expect(sent.length).toBe(2);
+    // Gói của Char và Pet đều phải target vào (0, 3) là tâm cụm 3 quái (0, 2), (0, 3), (0, 4)
+    // Frame của Char (sent[0]): target row=0, col=3 tại offset 11, 12 (đã XOR 0xad)
+    const charTargetCol = sent[0]![12] ^ 0xad;
+    expect(charTargetCol).toBe(3);
+    // Frame của Pet (sent[1]): target row=0, col=3 tại offset 11, 12 (đã XOR 0xad)
+    const petTargetCol = sent[1]![12] ^ 0xad;
+    expect(petTargetCol).toBe(3);
+  });
+
+  it("gói 32/01 ghi nhận đầy đủ tất cả mục tiêu khi dùng kỹ năng AOE (Loạn Kích 13013)", () => {
+    const { s, gameLogs } = session();
+    s.onData(frame(0x0f, 0x08, fx.mqv_0f08));
+    s.onData(frame(0x13, 0x04, fx.mqv_1304));
+    s.onData(frame(0x14, 0x0c, ""));
+
+    // Spawn 3 quái tại (0, 2), (0, 3), (0, 4)
+    for (const c of [2, 3, 4]) {
+      const p = Buffer.alloc(45);
+      p.writeUInt16LE(10201, 11 - 8);
+      p[29 - 8] = 0; p[30 - 8] = c;
+      p.writeUInt32LE(181, 31 - 8);
+      p.writeUInt32LE(100, 35 - 8);
+      p.writeUInt32LE(181, 39 - 8);
+      p.writeUInt32LE(100, 43 - 8);
+      p[47 - 8] = 30;
+      s.onData(frame(0x0b, 0x05, p.toString("hex")));
+    }
+
+    // Giả lập gói 32/01: Nhạn Điêu Tuyết (2, 2) dùng Loạn Kích (13013 = 0x32d5 = d5 32)
+    // Quét 3 mục tiêu: (0, 2) - 390 HP, (0, 3) - 390 HP, (0, 4) - 390 HP
+    // subLen = 6 + 3 * 11 = 39 (0x0027 = 27 00)
+    // Header 6 byte: actorRow=02, actorCol=02, skill=d532, targetCount=0301
+    // Target 1: 00 02 01 00 01 19 86 01 00 00 01 (targetRow=0, col=2, isHit=1, dmg=390)
+    // Target 2: 00 03 01 00 01 19 86 01 00 00 01 (targetRow=0, col=3, isHit=1, dmg=390)
+    // Target 3: 00 04 01 00 01 19 86 01 00 00 01 (targetRow=0, col=4, isHit=1, dmg=390)
+    const aoeHex = "00" +
+      "2700" +
+      "0202d5320301" +
+      "0002010001198601000001" +
+      "0003010001198601000001" +
+      "0004010001198601000001";
+    s.onData(frame(0x32, 0x01, aoeHex));
+
+    // Flush
+    s.onData(frame(0x34, 0x01, "00"));
+
+    const target02Log = gameLogs.find((l) => l.includes("(0,2)") && l.includes("Loạn Kích") && l.includes("Gục ngã"));
+    const target03Log = gameLogs.find((l) => l.includes("(0,3)") && l.includes("Loạn Kích") && l.includes("Gục ngã"));
+    const target04Log = gameLogs.find((l) => l.includes("(0,4)") && l.includes("Loạn Kích") && l.includes("Gục ngã"));
+
+    expect(target02Log).toBeDefined();
+    expect(target03Log).toBeDefined();
+    expect(target04Log).toBeDefined();
   });
 });

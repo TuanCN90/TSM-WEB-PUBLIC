@@ -23,9 +23,9 @@ describe("ChaseConfigStore", () => {
 
   it("canonicalKey correctly isolates accounts by clean username", () => {
     const store = new ChaseConfigStoreClass();
-    expect(store.canonicalKey("user_test_01")).toBe("user_test_01");
-    expect(store.canonicalKey("user_test_01@server1")).toBe("user_test_01");
-    expect(store.canonicalKey("User_Test_01")).toBe("user_test_01");
+    expect(store.canonicalKey("tuancn11")).toBe("tuancn11");
+    expect(store.canonicalKey("tuancn11@server1")).toBe("tuancn11");
+    expect(store.canonicalKey("TuanCN11")).toBe("tuancn11");
     expect(store.canonicalKey("userB@server2")).toBe("userb");
     expect(store.canonicalKey("")).toBe("default");
   });
@@ -33,8 +33,8 @@ describe("ChaseConfigStore", () => {
   it("saves and isolates chase configs strictly per account", () => {
     const store = new ChaseConfigStoreClass();
 
-    // Account 1: user_test_01 train tại Rừng 30 Đấu Vật (Map 12815, 230, 1570, maxRadius 120)
-    store.set("user_test_01@server1", {
+    // Account 1: tuancn11 train tại Rừng 30 Đấu Vật (Map 12815, 230, 1570, maxRadius 120)
+    store.set("tuancn11@server1", {
       enabled: true,
       mapId: 12815,
       originX: 230,
@@ -57,7 +57,7 @@ describe("ChaseConfigStore", () => {
       autoReturn: false,
     });
 
-    const cfg1 = store.get("user_test_01");
+    const cfg1 = store.get("tuancn11");
     expect(cfg1.enabled).toBe(true);
     expect(cfg1.mapId).toBe(12815);
     expect(cfg1.originX).toBe(230);

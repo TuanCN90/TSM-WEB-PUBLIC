@@ -2027,7 +2027,7 @@ class TsOnlineSession implements CodecSession {
 
   /**
    * 57/03 (server, lúc login và sau khi client gửi `57/03 00`): `00 | 03 | 3 × [% exp u16, chi phí u32]` = Free, lựa chọn 2, lựa chọn 3.
-   * Cap 23/10: 50%/0, 70%/441, 100%/5 — khớp khả năng chi trả (user_test_01 có 83.500 Xu, 300 Vàng). Cap cũ: 59 và 1 ⇒ Xu = số phút offline
+   * Cap 23/10: 50%/0, 70%/441, 100%/5 — khớp khả năng chi trả (tuancn11 có 83.500 Xu, 300 Vàng). Cap cũ: 59 và 1 ⇒ Xu = số phút offline
    * (1 Xu/phút), Vàng ≈ phút/88 làm tròn lên (suy ra, 🟡).
    */
   private offlineExpInfo(f: Buffer) {
@@ -3465,6 +3465,19 @@ class TsOnlineSession implements CodecSession {
     const buyHpQty = Math.max(0, Math.min(9999, Number(args[1]) || 0));
     const buySpEnabled = args[2] === "1" || args[2] === "true";
     const buySpQty = Math.max(0, Math.min(9999, Number(args[3]) || 0));
+    const sellIdsArg = args[4];
+
+    if (sellIdsArg) {
+      try {
+        const parsed = JSON.parse(sellIdsArg);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          for (const id of parsed) {
+            const num = Number(id);
+            if (Number.isInteger(num) && num > 0) this.autoLists.sell.add(num);
+          }
+        }
+      } catch {}
+    }
 
     const sleepWithSignal = async (ms: number) => {
       if (signal.aborted) throw new Error("Thao tác bị hủy");
@@ -3631,43 +3644,65 @@ class TsOnlineSession implements CodecSession {
         return { ok: false, message: `Chưa tiếp cận được NPC Thương nhân (cách ${Math.round(finalDist)}px)` };
       }
 
-      // --- BƯỚC 1: ĐỐI THOẠI NPC CHỌN BÁN & XỬ LÝ BÁN ---
-      this.io.log("info", "💬 [Mua/Bán] Bắt đầu tương tác với NPC Thương nhân Hương Dũng để Bán vật phẩm...");
-      // 1.1 Chuẩn bị tương tác: 20/02 00 08
-      write(encodeFrame(cmdBody(0x20, 0x02, [0x00, 0x08])));
-      await sleepWithSignal(600);
-
-      // 1.2 Gửi đối thoại NPC 12: 14/01 00 0c 00
-      write(encodeFrame(cmdBody(0x14, 0x01, [0x00, 0x0c, 0x00])));
-      await sleepWithSignal(1200);
-
-      // 1.3 Chọn menu Bán (0x1f = 31): 14/09 00 1f
-      write(encodeFrame(cmdBody(0x14, 0x09, [0x00, 0x1f])));
-      await sleepWithSignal(600);
-
-      // 1.4 Xác nhận mở giao diện bán (14/06 00):
-      write(encodeFrame(cmdBody(0x14, 0x06, [0x00])));
-      await sleepWithSignal(800);
-
-      // 1.5 Tìm và bán các món trong danh sách sell
+      // --- BƯỚC 1: KIỂM TRA VÀ BÁN VẬT PHẨM TRONG DANH SÁCH BÁN ---
       const toSell: { slot: number; id: number; qty: number; name: string }[] = [];
       for (const [slot, it] of this.bag.entries()) {
-        if (slot <= 50 && this.autoLists.sell.has(it.id)) {
+        if (this.autoLists.sell.has(it.id)) {
           const name = (itemNames as Record<string, string>)[it.id] ?? `Vật phẩm #${it.id}`;
           toSell.push({ slot, id: it.id, qty: it.qty, name });
         }
       }
 
-      let earnedGold = 0;
-      const prevEarnedListener = this.onGoldEarned;
-      this.onGoldEarned = (amount) => { earnedGold += amount; };
-      const goldBeforeSell = this.gold;
+      if (toSell.length === 0) {
+        const targetSellNames = this.autoLists.sell.size > 0
+          ? Array.from(this.autoLists.sell).map((id) => (itemNames as Record<string, string>)[id] ?? `#${id}`).join(", ")
+          : "Chưa chọn món nào";
 
-      try {
-        if (toSell.length === 0) {
-          this.io.log("info", "ℹ️ [Bán vật phẩm] Túi đồ không có vật phẩm nào trong danh sách Bán.");
+        // Kiểm tra xem món trong danh sách Bán có đang nằm trong Tiền Trang (Kho) không
+        const inBankItems: string[] = [];
+        for (const [bankSlot, it] of this.bank.entries()) {
+          if (this.autoLists.sell.has(it.id)) {
+            const name = (itemNames as Record<string, string>)[it.id] ?? `Vật phẩm #${it.id}`;
+            inBankItems.push(`${it.qty.toLocaleString("vi-VN")}x ${name} (ô ${bankSlot} Tiền Trang)`);
+          }
+        }
+
+        if (inBankItems.length > 0) {
+          this.io.game(`⚠️ [Bán vật phẩm] Phát hiện ${inBankItems.join(", ")} đang nằm trong TIỀN TRANG (Kho đồ), không phải trong Túi đồ cá nhân! NPC Thương nhân chỉ có thể mua đồ trong Túi đồ. Hãy rút đồ về Túi trước khi bán.`);
         } else {
-          this.io.log("info", `🪙 [Bán vật phẩm] Tìm thấy ${toSell.length} ô vật phẩm cần bán. Bắt đầu bán...`);
+          const bagSummary = this.bag.size > 0
+            ? `Túi đồ hiện có ${this.bag.size} ô: ${Array.from(this.bag.values()).slice(0, 5).map((it) => `${it.qty}x ${(itemNames as Record<string, string>)[it.id] ?? `#${it.id}`}`).join(", ")}${this.bag.size > 5 ? "..." : ""}`
+            : "Túi đồ hiện đang trống";
+          this.io.game(`ℹ️ [Bán vật phẩm] Túi đồ không có vật phẩm nào khớp danh sách Bán (${targetSellNames}). (${bagSummary}). Bỏ qua bước bán.`);
+        }
+        this.io.log("info", "ℹ️ [Bán vật phẩm] Túi đồ không có vật phẩm nào trong danh sách Bán.");
+      } else {
+        const sellSummary = toSell.map((t) => `${t.qty}x ${t.name}`).join(", ");
+        this.io.game(`🪙 [Bán vật phẩm] Tìm thấy ${toSell.length} ô vật phẩm cần bán (${sellSummary}). Bắt đầu giao dịch...`);
+        this.io.log("info", "💬 [Mua/Bán] Bắt đầu tương tác với NPC Thương nhân Hương Dũng để Bán vật phẩm...");
+
+        // 1.1 Chuẩn bị tương tác: 20/02 00 08
+        write(encodeFrame(cmdBody(0x20, 0x02, [0x00, 0x08])));
+        await sleepWithSignal(600);
+
+        // 1.2 Gửi đối thoại NPC 12: 14/01 00 0c 00
+        write(encodeFrame(cmdBody(0x14, 0x01, [0x00, 0x0c, 0x00])));
+        await sleepWithSignal(1200);
+
+        // 1.3 Chọn menu Bán (0x1f = 31): 14/09 00 1f
+        write(encodeFrame(cmdBody(0x14, 0x09, [0x00, 0x1f])));
+        await sleepWithSignal(600);
+
+        // 1.4 Xác nhận mở giao diện bán (14/06 00):
+        write(encodeFrame(cmdBody(0x14, 0x06, [0x00])));
+        await sleepWithSignal(800);
+
+        let earnedGold = 0;
+        const prevEarnedListener = this.onGoldEarned;
+        this.onGoldEarned = (amount) => { earnedGold += amount; };
+        const goldBeforeSell = this.gold;
+
+        try {
           for (const item of toSell) {
             this.io.log("info", `🪙 [Bán vật phẩm] Đang bán ${item.name} (x${item.qty}) tại ô ${item.slot}...`);
             // Gói tin 1b/02 00 01 [slot] [qty u32 LE]
@@ -3683,27 +3718,25 @@ class TsOnlineSession implements CodecSession {
             await sleepWithSignal(600);
           }
           this.io.log("info", "✓ [Bán vật phẩm] Đã bán xong toàn bộ vật phẩm trong danh sách.");
+
+          // 1.6 Thoát phiên giao dịch bán: 14/06 00
+          write(encodeFrame(cmdBody(0x14, 0x06, [0x00])));
+          await sleepWithSignal(1200);
+          this.io.log("info", "✓ [Bán vật phẩm] Đã thoát phiên giao dịch Bán.");
+        } finally {
+          this.onGoldEarned = prevEarnedListener;
         }
 
-        // 1.6 Thoát phiên giao dịch bán: 14/06 00
-        write(encodeFrame(cmdBody(0x14, 0x06, [0x00])));
-        await sleepWithSignal(1200);
-        this.io.log("info", "✓ [Bán vật phẩm] Đã thoát phiên giao dịch Bán.");
-      } finally {
-        this.onGoldEarned = prevEarnedListener;
-      }
-
-      if (toSell.length > 0) {
         const soldMap = new Map<string, number>();
         for (const it of toSell) {
           soldMap.set(it.name, (soldMap.get(it.name) ?? 0) + it.qty);
         }
-        const soldSummary = Array.from(soldMap.entries()).map(([name, qty]) => `${qty}x ${name}`).join(", ");
+        const soldSummaryStr = Array.from(soldMap.entries()).map(([name, qty]) => `${qty}x ${name}`).join(", ");
         const goldEarned = earnedGold > 0 ? earnedGold : Math.max(0, this.gold - goldBeforeSell);
         if (goldEarned > 0) {
-          this.io.game(`🪙 [Bán vật phẩm] Đã bán ${soldSummary} thu được ${goldEarned.toLocaleString("vi-VN")} Vàng.`);
+          this.io.game(`🪙 [Bán vật phẩm] Đã bán thành công ${soldSummaryStr} thu được ${goldEarned.toLocaleString("vi-VN")} Vàng.`);
         } else {
-          this.io.game(`🪙 [Bán vật phẩm] Đã bán ${soldSummary}.`);
+          this.io.game(`🪙 [Bán vật phẩm] Đã bán thành công ${soldSummaryStr}.`);
         }
       }
 
@@ -4180,10 +4213,36 @@ class TsOnlineSession implements CodecSession {
     // 4. F1 Tấn công: quái còn sống
     const livingEnemies = this.battleUnits.filter((u) => u.isEnemy && u.hp.cur > 0);
     if (livingEnemies.length > 0) {
+      // Ưu tiên hàng trước (row 0), nếu hàng trước đã dọn sạch thì đánh hàng sau (row 1)
       const front = livingEnemies.filter((u) => u.row === 0);
       const pool = front.length > 0 ? front : livingEnemies;
-      const center = pool.find((u) => u.col === 2);
-      const chosen = center ?? pool.sort((a, b) => (b.hp.max || 0) - (a.hp.max || 0))[0]!;
+
+      // Thuật toán chọn mục tiêu F1 thông minh (Smart AOE / Center Target):
+      // Ưu tiên mục tiêu mà khi kỹ năng lan 3 mục tiêu (col-1, col, col+1) quét qua sẽ trúng nhiều quái nhất.
+      // Tiếp theo ưu tiên quái nằm ở trung vị (vị trí ở giữa cụm quái), gần tâm bàn cờ (cột 2), và HP cao nhất.
+      const cols = pool.map((u) => u.col).sort((a, b) => a - b);
+      const medianCol = cols[Math.floor(cols.length / 2)] ?? 2;
+
+      const scored = pool.map((u) => {
+        const splashCount = pool.filter((e) => Math.abs(e.col - u.col) <= 1).length;
+        const distToClusterCenter = Math.abs(u.col - medianCol);
+        const distToBoardCenter = Math.abs(u.col - 2);
+        const hp = u.hp.max || u.hp.cur || 0;
+        return { unit: u, splashCount, distToClusterCenter, distToBoardCenter, hp };
+      });
+
+      scored.sort((a, b) => {
+        // 1. Quét trúng nhiều quái nhất
+        if (b.splashCount !== a.splashCount) return b.splashCount - a.splashCount;
+        // 2. Gần trung vị cụm quái nhất (vị trí ở giữa nhóm quái)
+        if (a.distToClusterCenter !== b.distToClusterCenter) return a.distToClusterCenter - b.distToClusterCenter;
+        // 3. Gần tâm bàn cờ (cột 2)
+        if (a.distToBoardCenter !== b.distToBoardCenter) return a.distToBoardCenter - b.distToBoardCenter;
+        // 4. Máu cao nhất
+        return b.hp - a.hp;
+      });
+
+      const chosen = scored[0]!.unit;
       return { row: chosen.row, col: chosen.col, label: `${chosen.name} (F1)` };
     }
 
@@ -4408,7 +4467,14 @@ class TsOnlineSession implements CodecSession {
   private queueAllyStrike(strike: (typeof this.pendingStrikes)[0]) {
     if (this.pendingStrikes.length > 0) {
       const prev = this.pendingStrikes[0]!;
-      if (prev.targetRow !== strike.targetRow || prev.targetCol !== strike.targetCol) {
+      // Nếu đòn mới KHÔNG cùng mục tiêu với đòn trước đó (khác targetRow/targetCol)
+      // HOẶC cùng actor (cùng 1 nhân vật dùng skill AOE đánh lan nhiều mục tiêu liên tiếp)
+      // thì flush ngay đòn trước để ghi log chi tiết từng mục tiêu!
+      if (
+        prev.targetRow !== strike.targetRow ||
+        prev.targetCol !== strike.targetCol ||
+        (prev.actorRow === strike.actorRow && prev.actorCol === strike.actorCol)
+      ) {
         this.flushPendingStrikes();
       }
     }
@@ -4473,22 +4539,43 @@ class TsOnlineSession implements CodecSession {
 
     // Phân tích các sub-blocks trong gói 32/01.
     // Chuẩn TS Online: từ offset 9 là danh sách các action block.
-    // Mỗi block bắt đầu bằng subLen (uint16LE, thường là 17 bytes) + 2 byte độ dài.
-    // Khi có combo (nhiều pet/char cùng tấn công), server đóng gói toàn bộ các đòn đánh vào cùng gói 32/01 này.
+    // Mỗi block bắt đầu bằng subLen (uint16LE).
+    // - Đòn đơn / combo: subLen = 17 (header 6 bytes + 1 target 11 bytes).
+    // - Đòn AOE quét nhiều mục tiêu (Loạn Kích, Cuồng Phong, Hỏa Lăng...): subLen = 6 + N * 11 (28 cho 2 target, 39 cho 3 target...).
     while (off + 2 <= f.length) {
       const subLen = f.readUInt16LE(off);
-      if (subLen >= 17 && off + 2 + subLen <= f.length) {
+      if (subLen >= 16 && off + 2 + subLen <= f.length) {
         const bOff = off + 2;
-        blocks.push({
-          actorRow: f[bOff]!,
-          actorCol: f[bOff + 1]!,
-          skillId: f.readUInt16LE(bOff + 2),
-          targetRow: f[bOff + 6]!,
-          targetCol: f[bOff + 7]!,
-          isHit: f[bOff + 8] !== 0,
-          statType: subLen >= 14 ? f[bOff + 11]! : 0x19,
-          damage: subLen >= 16 ? f.readUInt32LE(bOff + 12) : 0,
-        });
+        const actorRow = f[bOff]!;
+        const actorCol = f[bOff + 1]!;
+        const skillId = f.readUInt16LE(bOff + 2);
+
+        // Số lượng mục tiêu trong sub-block (mỗi target chiếm 11 bytes tính từ bOff + 6)
+        const targetCountFromLen = Math.max(1, Math.floor((subLen - 6) / 11));
+        const declaredTargetCount = f[bOff + 4] ? Math.max(1, f[bOff + 4]!) : 1;
+        const numTargets = Math.max(targetCountFromLen, declaredTargetCount);
+
+        for (let t = 0; t < numTargets; t++) {
+          const tOff = bOff + 6 + t * 11;
+          if (tOff + 8 <= bOff + subLen && tOff + 8 <= f.length) {
+            const targetRow = f[tOff]!;
+            const targetCol = f[tOff + 1]!;
+            const isHit = f[tOff + 2] !== 0;
+            const statType = tOff + 5 < f.length ? f[tOff + 5]! : 0x19;
+            const damage = tOff + 10 <= f.length ? f.readUInt32LE(tOff + 6) : 0;
+
+            blocks.push({
+              actorRow,
+              actorCol,
+              skillId,
+              targetRow,
+              targetCol,
+              isHit,
+              statType,
+              damage,
+            });
+          }
+        }
         off += 2 + subLen;
       } else {
         break;

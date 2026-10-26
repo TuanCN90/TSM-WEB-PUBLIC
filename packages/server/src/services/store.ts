@@ -276,7 +276,7 @@ export class ItemListStore {
 
   /**
    * Chuẩn hoá key tài khoản:
-   * Nếu là accountId dạng "user_test_01" hoặc "user_test_01@server" -> chuẩn hoá về username "user_test_01".
+   * Nếu là accountId dạng "tuancn11" hoặc "tuancn11@server" -> chuẩn hoá về username "tuancn11".
    * Giúp dữ liệu cấu hình thùng đồ gắn liền với tài khoản một cách độc lập và nhất quán.
    */
   canonicalKey(accountId: string): string {

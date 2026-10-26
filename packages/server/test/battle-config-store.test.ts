@@ -23,9 +23,9 @@ describe("BattleConfigStore", () => {
 
   it("canonicalKey correctly isolates accounts by clean username", () => {
     const store = new BattleConfigStoreClass();
-    expect(store.canonicalKey("user_test_01")).toBe("user_test_01");
-    expect(store.canonicalKey("user_test_01@server1")).toBe("user_test_01");
-    expect(store.canonicalKey("User_Test_01")).toBe("user_test_01");
+    expect(store.canonicalKey("tuancn11")).toBe("tuancn11");
+    expect(store.canonicalKey("tuancn11@server1")).toBe("tuancn11");
+    expect(store.canonicalKey("TuanCN11")).toBe("tuancn11");
     expect(store.canonicalKey("userB@server2")).toBe("userb");
     expect(store.canonicalKey("")).toBe("default");
   });
@@ -33,8 +33,8 @@ describe("BattleConfigStore", () => {
   it("saves and isolates battle configs per account including 21-turn strategy", () => {
     const store = new BattleConfigStoreClass();
 
-    // Account 1 (user_test_01) configures: Turn 1: Char + Pet Def, Turn 2: Char Attack, Pet Def
-    store.set("user_test_01", {
+    // Account 1 (tuancn11) configures: Turn 1: Char + Pet Def, Turn 2: Char Attack, Pet Def
+    store.set("tuancn11", {
       playerAction: { type: "attack", skillId: 10000, target: "F1" },
       petAction: { type: "attack", skillId: 10000, target: "F1" },
       autoFight: true,
@@ -61,7 +61,7 @@ describe("BattleConfigStore", () => {
     });
 
     // Read back Account 1
-    const cfgA = store.get("user_test_01@another_server");
+    const cfgA = store.get("tuancn11@another_server");
     expect(cfgA).toBeDefined();
     expect(cfgA?.turns).toHaveLength(2);
     expect(cfgA?.turns?.[0]?.turn).toBe(1);
@@ -78,7 +78,7 @@ describe("BattleConfigStore", () => {
 
     // Reload store from file to ensure persistence
     const reloaded = new BattleConfigStoreClass();
-    const persistedA = reloaded.get("user_test_01");
+    const persistedA = reloaded.get("tuancn11");
     expect(persistedA?.turns).toHaveLength(2);
     expect(persistedA?.turns?.[0]?.playerAction.skillId).toBe(17001);
   });

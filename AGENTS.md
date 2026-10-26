@@ -20,3 +20,11 @@
   1. Chạy `npm run typecheck` kiểm tra kiểu dữ liệu TypeScript.
   2. Chạy `npm test` kiểm tra tính toàn vẹn của hệ thống.
   3. Chạy `npm run build` xác nhận web client đóng gói thành công.
+
+## 5. QUY TẮC ĐỒNG BỘ 2 REPO (ORIGIN & PUBLIC)
+- Khi người dùng yêu cầu commit/push:
+  - Phải push lên cả 2 repo:
+    1. **Repo gốc**: `https://github.com/TuanCN90/TS-Bot-Web.git` (origin)
+    2. **Repo public**: `https://github.com/TuanCN90/TSM-WEB-PUBLIC.git` (public)
+  - **BẢO MẬT TUYỆT ĐỐI**: Không bao giờ commit hay push các file dữ liệu tài khoản (`data/accounts.json`, `data/battle-configs.json`, v.v.) lên repo public. Luôn đảm bảo repo public chỉ chứa mã nguồn sạch.
+

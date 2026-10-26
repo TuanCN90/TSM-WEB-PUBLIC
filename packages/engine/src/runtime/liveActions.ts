@@ -458,6 +458,7 @@ export const LIVE_ACTIONS: LiveAction[] = [
       { name: "buyHpQty", label: "Số lượng HP", type: "string", required: false },
       { name: "buySpEnabled", label: "Mua SP", type: "string", required: false },
       { name: "buySpQty", label: "Số lượng SP", type: "string", required: false },
+      { name: "sellIdsJson", label: "Danh sách ID bán", type: "string", required: false },
     ],
     toCommand: (p) => ({
       type: "Action",
@@ -467,6 +468,7 @@ export const LIVE_ACTIONS: LiveAction[] = [
         p.buyHpQty ?? "999",
         p.buySpEnabled ?? "1",
         p.buySpQty ?? "999",
+        p.sellIdsJson ?? "[]",
       ],
     }),
   },
@@ -476,6 +478,7 @@ export const LIVE_ACTIONS: LiveAction[] = [
       { name: "buyHpQty", label: "Số lượng HP", type: "string", required: false },
       { name: "buySpEnabled", label: "Mua SP", type: "string", required: false },
       { name: "buySpQty", label: "Số lượng SP", type: "string", required: false },
+      { name: "sellIdsJson", label: "Danh sách ID bán", type: "string", required: false },
     ],
     toCommand: (p) => ({
       type: "Action",
@@ -485,6 +488,7 @@ export const LIVE_ACTIONS: LiveAction[] = [
         p.buyHpQty ?? "999",
         p.buySpEnabled ?? "1",
         p.buySpQty ?? "999",
+        p.sellIdsJson ?? "[]",
       ],
     }) },
   { name: "resolve_item", label: "Phân giải vật phẩm", description: "Phân giải vật phẩm ở ô túi", hidden: true, params: [int("itemId", "Item ID"), { ...int("slot", "Ô túi"), required: false }],

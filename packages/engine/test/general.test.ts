@@ -102,7 +102,7 @@ describe("Nhận quà thư (53/xx)", () => {
   });
 });
 
-describe("Chỉ số võ tướng như client (cap user_test_01, Ma Quan Vũ)", () => {
+describe("Chỉ số võ tướng như client (cap tuancn11, Ma Quan Vũ)", () => {
   it("gốc 66/189/89/102/85/60 + đồ (08/02) 46/50/29/27", () => {
     const { s, st } = setup();
     s.onData(frame(0x08, 0x02, "00040100d2013200000000000000")); // atk 50 (đến trước 0f/08 cũng được)
@@ -119,7 +119,7 @@ describe("Chỉ số võ tướng như client (cap user_test_01, Ma Quan Vũ)", 
   });
 });
 
-describe("Nhân vật (cap user_test_01): Point, đồ, trang bị", () => {
+describe("Nhân vật (cap tuancn11): Point, đồ, trang bị", () => {
   it("05/03 Point 238; 08/01 đồ 50/29/46/27; 17/0b 5 món Sơ Tâm", () => {
     const { s, st } = setup();
     s.onData(frame(0x05, 0x03, (fx as any).player_0503));
@@ -279,10 +279,9 @@ describe("Hệ thống Trận đấu & Kỹ năng (Treo Rung 30 Dau Vat.pcap)", 
     // 34/01: Bắt đầu lượt đánh (Turn timer) -> Auto bật: gửi lệnh đánh cho Char (3,2) rồi Pet (2,2)
     s.onData(frame(0x34, 0x01, "00"));
     expect(sent.length).toBe(2);
-    // Gói của Char: target row 0, col 2, skill 10000 (Đấu Vật = 10 27)
-    expect(sent[0]).toBe(body(0x32, 0x01, "000302000210270000"));
-    // Gói của Pet: target row 0, col 2, skill 10000 (Đấu Vật = 10 27)
-    expect(sent[1]).toBe(body(0x32, 0x01, "000202000210270000"));
+    // Gói của Char & Pet: F1 thông minh tự động target vào tâm cụm quái (0, 3) giữa (0,2), (0,3), (0,4)
+    expect(sent[0]).toBe(body(0x32, 0x01, "000302000310270000"));
+    expect(sent[1]).toBe(body(0x32, 0x01, "000202000310270000"));
 
     // 14/08: Trận đấu kết thúc
     s.onData(frame(0x14, 0x08, "002a"));
