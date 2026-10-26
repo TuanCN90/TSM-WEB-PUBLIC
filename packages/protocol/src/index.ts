@@ -516,6 +516,8 @@ export const DAILY_CHECKLIST_CATALOG: DailyChecklistItemDef[] = [
   { key: "spin_gold", title: "Quay 1 xu vàng", maxCount: 1, description: "Vòng quay may mắn 1 xu vàng" },
   { key: "pull_secret", title: "Rút 1 bí cấp tướng", maxCount: 1, description: "Rút miễn phí / 1 lần bí cấp võ tướng" },
   { key: "pull_card", title: "Rút 1 thẻ tướng", maxCount: 1, description: "Rút thẻ chiêu mộ võ tướng" },
+  { key: "daily_quest_reward", title: "Quà nhiệm vụ ngày", maxCount: 1, description: "Nhận full quà nhiệm vụ và rương điểm tích luỹ hàng ngày" },
+  { key: "battle_pass_reward", title: "Quà Thông Hành", maxCount: 1, description: "Nhận tất cả mốc quà Thông Hành (Battle Pass) đã đạt điểm" },
 ];
 
 export interface DailyChecklistItemState {
@@ -815,6 +817,8 @@ export interface CharacterState {
   battleUnits?: BattleUnit[];
   /** Cấu hình chế độ tự động truy kích quái/NPC tại tọa độ bãi train. */
   chaseConfig?: ChaseConfig;
+  /** Trạng thái tự động di chuyển 30px quanh điểm kích hoạt (tách biệt với truy kích). */
+  autoMove?: AutoMoveState;
   /** Kế hoạch lập đội giữa các tài khoản (server điền). */
   partyPlan?: PartyPlanState;
   /** Kế hoạch phó bản đội (server điền). */
@@ -874,6 +878,7 @@ export type EscortPhase =
   | "moving_to_inn"
   | "opening_inn"
   | "escorting"
+  | "reward_ready"
   | "claiming_reward"
   | "completed_daily"
   | "error";
@@ -896,6 +901,15 @@ export interface ChaseConfig {
   npcId?: number;
   npcName?: string;
   autoReturn: boolean; // Tự động quay về tọa độ gốc sau trận đấu
+}
+
+/** Cấu hình tự động di chuyển tuần tra quanh vị trí ban đầu (tách biệt với truy kích). */
+export interface AutoMoveState {
+  enabled: boolean;
+  mapId: number;
+  originX: number;
+  originY: number;
+  maxRadius: number; // Mặc định 150px
 }
 
 export interface StepInfo {
@@ -1063,5 +1077,7 @@ export type ItemLists = Record<ItemListKey, number[]> & {
   autoSweepEnabled?: boolean;
   buySettings?: BuySettings;
   autoHeal?: AutoHealConfig;
+  /** Ngày gần nhất đã thực hiện hợp vật phẩm (YYYY-MM-DD theo giờ Đài Loan UTC+8) */
+  lastCombinedDate?: string;
 };
 

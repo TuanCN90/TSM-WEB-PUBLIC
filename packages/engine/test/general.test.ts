@@ -36,8 +36,8 @@ describe("Võ tướng xuất chiến: danh sách + 13/01", () => {
     expect(st().pet.name).toBe("Lữ Bố");
     expect(st().pets.map((p: any) => p.active)).toEqual([true, false, false]);
     expect(games.at(-1)).toContain("Lữ Bố đã xuất chiến");
-    // pet_rest chưa có gói
-    expect(() => s.encodeAction("pet_rest", [])).toThrow(/chưa có gói/);
+    // pet_rest chuẩn 13/02 00 (theo pcap Ngung xuat chien slot 1 & Quay lap ba slot 1.pcap)
+    expect(s.encodeAction("pet_rest", [])!.toString("hex")).toBe(body(0x13, 0x02, "00"));
   });
 });
 
@@ -841,6 +841,87 @@ describe("Hệ thống Tự động di chuyển & Truy kích quái (set_chase_co
   });
 });
 
+describe("Hệ thống Tự động di chuyển độc lập (set_auto_move)", () => {
+  it("bật tự động di chuyển cập nhật state autoMove và phát sinh thông báo game", async () => {
+    const { s, st, games } = setup();
+    // Vị trí ban đầu map 12001 (100, 200)
+    const movePayload = Buffer.alloc(16);
+    movePayload.writeUInt16LE(12001, 17 - 8);
+    movePayload.writeUInt16LE(100, 19 - 8);
+    movePayload.writeUInt16LE(200, 21 - 8);
+    movePayload[23 - 8] = 0;
+    s.onData(frame(0x07, 0x00, movePayload.toString("hex")));
+
+    const res = await s.executeAction(
+      "set_auto_move",
+      ["1", "12001", "100", "200", "150"],
+      () => {},
+      new AbortController().signal
+    );
+    expect(res).toEqual({ ok: true });
+
+    const autoMove = st().autoMove;
+    expect(autoMove).toBeDefined();
+    expect(autoMove!.enabled).toBe(true);
+    expect(autoMove!.mapId).toBe(12001);
+    expect(autoMove!.originX).toBe(100);
+    expect(autoMove!.originY).toBe(200);
+    expect(autoMove!.maxRadius).toBe(150);
+    expect(games.at(-1)).toContain("Kích hoạt tự động di chuyển");
+  });
+
+  it("tắt tự động di chuyển cập nhật autoMove.enabled = false", async () => {
+    const { s, st, games } = setup();
+    await s.executeAction(
+      "set_auto_move",
+      ["1", "12001", "100", "200", "150"],
+      () => {},
+      new AbortController().signal
+    );
+    expect(st().autoMove?.enabled).toBe(true);
+
+    // Tắt
+    await s.executeAction(
+      "set_auto_move",
+      ["0"],
+      () => {},
+      new AbortController().signal
+    );
+    expect(st().autoMove?.enabled).toBe(false);
+    expect(games.at(-1)).toContain("Đã dừng tự động di chuyển");
+  });
+
+  it("MockTransport hỗ trợ set_auto_move và phản ánh state chính xác", async () => {
+    const { MockTransport } = await import("../src/transport/MockTransport");
+    const mock = new MockTransport();
+    await mock.connect({
+      credentials: { username: "test", password: "p", server: "s" },
+      log: () => {},
+      speed: 1,
+    });
+    let latestState = mock.getState();
+    mock.onState((st) => { latestState = st; });
+
+    await mock.execute(
+      { type: "Action", name: "set_auto_move", args: ["1", "12001", "300", "400", "150"] },
+      new AbortController().signal
+    );
+
+    expect(latestState.autoMove).toBeDefined();
+    expect(latestState.autoMove!.enabled).toBe(true);
+    expect(latestState.autoMove!.mapId).toBe(12001);
+    expect(latestState.autoMove!.originX).toBe(300);
+    expect(latestState.autoMove!.originY).toBe(400);
+
+    // Tắt
+    await mock.execute(
+      { type: "Action", name: "set_auto_move", args: ["0"] },
+      new AbortController().signal
+    );
+    expect(latestState.autoMove!.enabled).toBe(false);
+  });
+});
+
 describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
   it("getSafeSpotForMap: tính đúng toạ độ lùi 55px từ cổng vào map", async () => {
     const { getSafeSpotForMap } = await import("../src/runtime/route");
@@ -1319,6 +1400,75 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
     expect(steps.some((st) => "cmd" in st && st.cmd.name === "send_menu" && st.cmd.args[0] === "32")).toBe(true);
     expect(steps.some((st) => "cmd" in st && st.cmd.name === "open_inn_request")).toBe(true);
     expect(steps.some((st) => "cmd" in st && st.cmd.name === "escort_query")).toBe(true);
+  });
+
+  it("escort_claim gửi đúng gói 56/05 00 01 và nhận phản hồi giải phóng pet", async () => {
+    const { s, sent, st } = setup();
+    sent.length = 0;
+
+    // Giả lập pet ô 1 đang vận tiêu
+    s.onData(frame(0x1f, 0x06, "000115370106000000cd00000006bdb2a4e5ae5601"));
+    expect(st().innPets?.[0]?.status).toBe(1);
+
+    const res = await s.executeAction!("escort_claim", [], (b) => sent.push(b.toString("hex")), new AbortController().signal);
+    expect(res).toEqual({ ok: true, message: expect.stringContaining("nhận thưởng") });
+
+    // Server phản hồi 56/05 thành công
+    s.onData(frame(0x56, 0x05, "0001"));
+    // Pet phải được giải phóng (status = 0)
+    expect(st().innPets?.[0]?.status).toBe(0);
+    expect(st().escort?.activeEscort).toBeUndefined();
+  });
+
+  describe("Nhiệm vụ hàng ngày & Sổ Thông Hành (5b/02, 5b/03, 4d/0b)", () => {
+    it("daily_quest_claim gửi đúng gói 5b/02 (9 nhiệm vụ) và 4 gói 5b/03 (4 rương mốc)", async () => {
+      const { s } = setup();
+      const sentPkt: Buffer[] = [];
+      const res = await s.executeAction!("daily_quest_claim", [], (b) => sentPkt.push(b), new AbortController().signal);
+      expect(res).toEqual({ ok: true, message: expect.stringContaining("nhiệm vụ ngày") });
+
+      const dec = sentPkt.map((b) => {
+        const u = Buffer.from(b);
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // 1. Gói 5b/02 (9 nhiệm vụ ngày)
+      expect(dec[0]![0]).toBe(0x5b);
+      expect(dec[0]![1]).toBe(0x02);
+      expect(dec[0]![2]).toBe(0x00);
+      expect(dec[0]![3]).toBe(0x09); // 9 nhiệm vụ
+
+      // 2..5. Các gói 5b/03 cho 4 rương mốc (2, 4, 6, 8)
+      expect(dec).toHaveLength(5);
+      expect(dec[1]).toEqual(Buffer.from([0x5b, 0x03, 0x00, 0x01, 0x00, 0x02, 0x30, 0x00]));
+      expect(dec[2]).toEqual(Buffer.from([0x5b, 0x03, 0x00, 0x01, 0x00, 0x04, 0x32, 0x00]));
+      expect(dec[3]).toEqual(Buffer.from([0x5b, 0x03, 0x00, 0x01, 0x00, 0x06, 0x34, 0x00]));
+      expect(dec[4]).toEqual(Buffer.from([0x5b, 0x03, 0x00, 0x01, 0x00, 0x08, 0x36, 0x00]));
+    });
+
+    it("battle_pass_claim gửi 4d/0b mở thông hành và nhận các mốc quà", async () => {
+      const { s } = setup();
+      // Server nạp thông tin thông hành: 378 điểm, mốc kế tiếp là 58 (0x003a)
+      s.onData(frame(0x4d, 0x0b, "007a013a00"));
+
+      const sentPkt: Buffer[] = [];
+      const res = await s.executeAction!("battle_pass_claim", [], (b) => sentPkt.push(b), new AbortController().signal);
+      expect(res).toEqual({ ok: true, message: expect.stringContaining("Sổ Thông Hành") });
+
+      const dec = sentPkt.map((b) => {
+        const u = Buffer.from(b);
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // Gói đầu tiên: 4d 0b 00 80 00 (mở thông hành tab 0)
+      expect(dec[0]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x80, 0x00]));
+      // Các gói tiếp theo gửi mốc quà 4d 0b 00 81 ...
+      expect(dec[1]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3a, 0x00])); // mốc 58
+      expect(dec[2]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3c, 0x00])); // mốc 60
+      expect(dec[3]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3e, 0x00])); // mốc 62
+    });
   });
 });
 

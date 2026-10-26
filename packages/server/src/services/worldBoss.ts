@@ -32,6 +32,7 @@ const canon = (accountId: string) => {
 export interface WorldBossHost {
   entries(): [string, GameConnection][];
   pushCharacter(accountId: string): void;
+  refreshParty?(accountId: string): void;
 }
 
 interface Runtime {
@@ -102,6 +103,12 @@ export class WorldBossService {
     };
   }
 
+  isRunning(accountId: string): boolean {
+    const r = this.rt.get(canon(accountId));
+    if (!r) return false;
+    return r.phase !== "idle" && r.phase !== "done" && r.phase !== "error";
+  }
+
   private setPhase(r: Runtime, phase: WorldBossPhase, message: string) {
     r.phase = phase;
     r.phaseAt = Date.now();
@@ -119,7 +126,7 @@ export class WorldBossService {
     const ch = conn.character();
 
     r.currentAttempt = 0;
-    r.totalAttempts = 1; // Hiện tại active handle đánh 1 lượt
+    r.totalAttempts = cfg.attempts && cfg.attempts > 0 ? Math.min(cfg.attempts, 7) : 1;
     r.ticketsUsed = 0;
     r.petSwitched = false;
     r.originalMap = ch?.location.map;
@@ -130,13 +137,28 @@ export class WorldBossService {
 
     this.store.set(accountId, { enabled: true });
 
+    // Tắt toàn bộ kiểm tra tổ đội và tự động bỏ chạy khi săn boss
+    conn.partyGate = undefined;
+    void conn.dispatch("set_party_config", {
+      inviteFrom: "",
+      requestFromJson: "[]",
+      role: "none",
+      leaderName: "",
+      membersJson: "[]",
+      escapeIfNotFullParty: "0",
+    }, { quiet: true }).catch(() => undefined);
+    void conn.dispatch("set_battle_config", {
+      autoEscape: "0",
+    }, { quiet: true }).catch(() => undefined);
+
     if (ch?.party.joined) {
       this.setPhase(r, "leaving_party", "Rời đội trước khi săn Boss Thế Giới...");
+      void conn.dispatch("leave_party", undefined, { quiet: true }).catch(() => undefined);
     } else {
       this.setPhase(r, "preparing", "Chuẩn bị trang bị và di chuyển tới Boss Thế Giới...");
     }
 
-    conn.log("info", `🐉 [Boss Thế Giới] Bắt đầu săn Boss Thế Giới (1 lượt)!`, "game");
+    conn.log("info", `🐉 [Boss Thế Giới] Bắt đầu săn Boss Thế Giới (${r.totalAttempts} lượt)!`, "game");
     this.host.pushCharacter(accountId);
     return { ok: true };
   }
@@ -152,6 +174,7 @@ export class WorldBossService {
 
     this.setPhase(r, "idle", "Đã dừng săn Boss Thế Giới");
     this.store.set(accountId, { enabled: false });
+    this.host.refreshParty?.(accountId);
     this.host.pushCharacter(accountId);
     return { ok: true };
   }
@@ -186,8 +209,14 @@ export class WorldBossService {
               this.setPhase(r, "preparing", "Đã rời đội. Chuẩn bị săn Boss...");
               break;
             }
+            conn.log("info", "🚪 [Boss Thế Giới] Đang rời đội ngũ để săn Boss...", "game");
             await conn.dispatch("leave_party", undefined, { quiet: true }).catch(() => undefined);
-            r.message = "Đang chờ rời đội...";
+            r.fails++;
+            if (r.fails >= 2) {
+              this.setPhase(r, "preparing", "Đã thoát đội ngũ. Chuẩn bị săn Boss...");
+            } else {
+              r.message = "Đang chờ rời đội...";
+            }
             break;
           }
 
@@ -262,13 +291,22 @@ export class WorldBossService {
             conn.log("info", `💊 [Boss Thế Giới] Quét ăn HP/SP theo mốc cấu hình trước khi vào Boss...`, "game");
             await conn.dispatch("sweep_auto_heal", undefined, { quiet: true }).catch(() => undefined);
             await new Promise((res) => setTimeout(res, 800));
-            this.setPhase(r, "challenging", "Đối thoại khiêu chiến NPC 45 tại Trác Quận (1910, 1190)...");
+            if (cfg.useTickets && r.currentAttempt >= 5) {
+              this.setPhase(r, "using_ticket", `Sử dụng Vé Khiêu Chiến Boss (Item ${TICKET_ITEM_ID})...`);
+            } else {
+              this.setPhase(r, "challenging", `Đối thoại khiêu chiến NPC 45 tại Trác Quận (1910, 1190)...`);
+            }
             break;
           }
 
           case "using_ticket": {
-            // (Tạm thời disable flow nhiều lượt / ăn vé - Coming Soon)
-            this.setPhase(r, "challenging", `Khiêu chiến Boss Thế Giới...`);
+            if (cfg.useTickets && r.currentAttempt >= 5) {
+              conn.log("info", `🎟️ [Boss Thế Giới] Sử dụng Vé Khiêu Chiến Boss (Item ${TICKET_ITEM_ID})...`, "game");
+              await conn.dispatch("use_item", { itemId: TICKET_ITEM_ID, count: 1, target: 0 }, { quiet: true }).catch(() => undefined);
+              r.ticketsUsed++;
+              await new Promise((res) => setTimeout(res, 1000));
+            }
+            this.setPhase(r, "challenging", `Đối thoại khiêu chiến NPC 45 tại Trác Quận (1910, 1190)...`);
             break;
           }
 
@@ -278,9 +316,16 @@ export class WorldBossService {
               break;
             }
 
-            // Gửi lệnh click NPC 45 tại 12001 (1910, 1190)
+            // Chuỗi đối thoại khiêu chiến NPC 45 chuẩn pcap Boss the gioi.pcap (20/02 + 14/01 + 14/09 1e + 14/06)
             conn.log("info", `⚔️ [Boss Thế Giới] Khiêu chiến Boss Thế Giới (NPC 45)...`, "game");
-            await conn.dispatch("click", { npc: BOSS_NPC }, { quiet: true }).catch(() => undefined);
+            await conn.dispatch("challenge_world_boss", undefined, { quiet: true }).catch(async () => {
+              await conn.dispatch("interact_prep", { mode: 8 }, { quiet: true }).catch(() => undefined);
+              await new Promise((res) => setTimeout(res, 150));
+              await conn.dispatch("click", { npc: BOSS_NPC }, { quiet: true }).catch(() => undefined);
+              await new Promise((res) => setTimeout(res, 1200));
+              await conn.dispatch("send_menu", { option: 30 }, { quiet: true }).catch(() => undefined);
+              await conn.dispatch("ready_1406", undefined, { quiet: true }).catch(() => undefined);
+            });
             r.challengeSentAt = now;
             r.message = `Chờ vào trận đấu Boss...`;
 
@@ -300,7 +345,7 @@ export class WorldBossService {
 
             // Trận đấu kết thúc! Ghi messlog sự kiện và kết thúc lượt
             r.currentAttempt++;
-            conn.log("info", `🎉 [Boss Thế Giới] Trận đấu kết thúc! Hoàn thành 1 lượt khiêu chiến Boss Thế Giới.`, "game");
+            conn.log("info", `🎉 [Boss Thế Giới] Trận đấu kết thúc! Hoàn thành 1 lượt khiêu chiến Boss Thế Giới (Lượt ${r.currentAttempt}/${r.totalAttempts}).`, "game");
             this.checklistStore?.recordProgress(id, "world_boss", 1);
 
             // Kiểm tra nếu nhân vật tử vong
@@ -309,7 +354,11 @@ export class WorldBossService {
               break;
             }
 
-            this.setPhase(r, "finishing", "Đã hoàn thành 1 lượt Boss Thế Giới...");
+            if (r.currentAttempt >= r.totalAttempts) {
+              this.setPhase(r, "finishing", `Đã hoàn thành ${r.currentAttempt}/${r.totalAttempts} trận Boss Thế Giới...`);
+            } else {
+              this.setPhase(r, "healing", `Chuẩn bị cho lượt Boss thứ ${r.currentAttempt + 1}/${r.totalAttempts}...`);
+            }
             break;
           }
 
@@ -336,7 +385,7 @@ export class WorldBossService {
           }
 
           case "finishing": {
-            conn.log("info", `🎉 [Boss Thế Giới] Hoàn tất 1 lượt khiêu chiến Boss Thế Giới!`, "game");
+            conn.log("info", `🎉 [Boss Thế Giới] Hoàn tất toàn bộ lượt khiêu chiến Boss Thế Giới!`, "game");
 
             // Bật lại auto HP/SP
             await conn.dispatch("set_auto_heal", { autoHealJson: JSON.stringify({ enabled: true }) }, { quiet: true }).catch(() => undefined);
@@ -361,6 +410,7 @@ export class WorldBossService {
 
             this.setPhase(r, "done", `Đã hoàn thành ${r.currentAttempt}/${r.totalAttempts} trận Boss Thế Giới!`);
             this.store.set(id, { enabled: false });
+            this.host.refreshParty?.(id);
             break;
           }
         }

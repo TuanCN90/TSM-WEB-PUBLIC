@@ -92,6 +92,8 @@ export const api = {
     req<import("@tsbot/protocol").EscortConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/escort-config`, config),
   escortRun: (accountId: string) =>
     req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/escort/run`),
+  escortClaim: (accountId: string) =>
+    req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/escort/claim`),
   openInn: (accountId: string) =>
     req<{ ok: boolean; message?: string }>("POST", `/api/accounts/${encodeURIComponent(accountId)}/open-inn`),
   chaseConfig: (accountId: string) => req<import("@tsbot/protocol").ChaseConfig>("GET", `/api/accounts/${encodeURIComponent(accountId)}/chase-config`),

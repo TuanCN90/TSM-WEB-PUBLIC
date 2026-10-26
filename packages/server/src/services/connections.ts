@@ -1,5 +1,5 @@
 import { EngineError, GameConnection, getDriver } from "@tsbot/engine";
-import type { ActionParams, ActionResult, CharacterState, ConnectionInfo, LogEntry, LoginBody, ScriptControl } from "@tsbot/protocol";
+import { getTaiwanDateKey, type ActionParams, type ActionResult, type CharacterState, type ConnectionInfo, type LogEntry, type LoginBody, type ScriptControl } from "@tsbot/protocol";
 import { DungeonSoloService } from "./dungeonSolo";
 import { DungeonTeamService } from "./dungeonTeam";
 import { WorldBossService } from "./worldBoss";
@@ -46,7 +46,11 @@ export class ConnectionManager {
   /** Săn Boss Thế Giới (xem services/worldBoss.ts). */
   readonly worldBossConfigs = new WorldBossConfigStore();
   readonly worldBoss = new WorldBossService(
-    { entries: () => [...this.conns.entries()], pushCharacter: (id) => this.pushCharacter(id) },
+    {
+      entries: () => [...this.conns.entries()],
+      pushCharacter: (id) => this.pushCharacter(id),
+      refreshParty: (id) => this.party.refresh(id),
+    },
     this.worldBossConfigs,
     this.dailyChecklist,
   );
@@ -108,6 +112,12 @@ export class ConnectionManager {
   entries(): [string, GameConnection][] {
     return [...this.conns.entries()];
   }
+  isWorldBossRunning(accountId: string): boolean {
+    return this.worldBoss.isRunning(accountId);
+  }
+  isDungeonSoloRunning(accountId: string): boolean {
+    return this.dungeonSolo.isRunning(accountId);
+  }
   onlineCount(): number {
     return [...this.conns.values()].filter((c) => !c.isOffline).length;
   }
@@ -167,7 +177,18 @@ export class ConnectionManager {
         lastClosedAt: this.closed.get(accountId),
         onClosed: (ts) => this.closed.set(accountId, ts),
         onChange: (i) => this.onChange(i),
-        onLog: (e) => this.onLog(accountId, e),
+        onLog: (e) => {
+          if (
+            e.msg.includes("[Tự động hợp] Hợp thành") ||
+            e.msg.includes("[Tự động hợp] Hợp thành công") ||
+            e.msg.includes("[Hợp hàng ngày]")
+          ) {
+            this.dailyChecklist?.recordProgress(accountId, "combine_item", 1);
+            this.itemLists?.recordCombineToday(accountId);
+            this.pushCharacter?.(accountId);
+          }
+          this.onLog(accountId, e);
+        },
         onCharacter: (ch) => this.onCharacter(accountId, this.withPlan(accountId, ch)),
       });
       this.conns.set(accountId, c);
@@ -198,6 +219,9 @@ export class ConnectionManager {
     }
     const lists = this.itemLists?.get(accountId);
     if (lists) {
+      const today = getTaiwanDateKey();
+      const combinedToday = lists.lastCombinedDate === today || this.dailyChecklist?.get(accountId)?.items?.["combine_item"]?.done === true;
+      const effectiveLastDate = combinedToday ? today : (lists.lastCombinedDate ?? "");
       await c.dispatch("set_item_lists", {
         autoDropJson: JSON.stringify(lists.discard ?? []),
         autoOpenJson: JSON.stringify(lists.autoOpen ?? []),
@@ -205,9 +229,10 @@ export class ConnectionManager {
         autoContributeJson: JSON.stringify(lists.contribute ?? []),
         autoCombineJson: JSON.stringify(lists.combine ?? []),
         sellJson: JSON.stringify(lists.sell ?? []),
-        togglesJson: JSON.stringify(lists.toggles ?? {}),
+        togglesJson: JSON.stringify({ ...lists.toggles, lastCombinedDate: effectiveLastDate }),
         autoSweepEnabled: lists.autoSweepEnabled ? "1" : "0",
         autoHealJson: JSON.stringify(lists.autoHeal ?? {}),
+        lastCombinedDate: effectiveLastDate,
       }).catch(() => {});
     }
     const chaseCfg = this.chaseConfigs?.get(accountId);
@@ -299,6 +324,19 @@ export class ConnectionManager {
       } else if (action === "pull_all") {
         this.dailyChecklist?.recordProgress(accountId, "pull_secret", 1);
         this.dailyChecklist?.recordProgress(accountId, "pull_card", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "combine_item") {
+        this.dailyChecklist?.recordProgress(accountId, "combine_item", 1);
+        this.itemLists?.recordCombineToday(accountId);
+        this.pushCharacter?.(accountId);
+      } else if (action === "spin_lap_ba" || action === "xu_lap_ba") {
+        this.dailyChecklist?.recordProgress(accountId, "xu_lap_ba", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "daily_quest_claim" || action === "claim_daily_quests") {
+        this.dailyChecklist?.recordProgress(accountId, "daily_quest_reward", 1);
+        this.pushCharacter?.(accountId);
+      } else if (action === "battle_pass_claim" || action === "claim_battle_pass") {
+        this.dailyChecklist?.recordProgress(accountId, "battle_pass_reward", 1);
         this.pushCharacter?.(accountId);
       }
     }

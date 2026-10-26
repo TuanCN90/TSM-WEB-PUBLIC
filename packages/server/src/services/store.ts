@@ -299,6 +299,7 @@ export class ItemListStore {
       ...base,
       ...data,
       autoSweepEnabled: data.autoSweepEnabled !== undefined ? Boolean(data.autoSweepEnabled) : base.autoSweepEnabled,
+      lastCombinedDate: typeof data.lastCombinedDate === "string" ? data.lastCombinedDate : undefined,
       toggles: {
         ...base.toggles,
         ...(data.toggles ?? {}),
@@ -419,6 +420,22 @@ export class ItemListStore {
     };
     this.f.write({ ...all, [cKey]: cur });
     return cur;
+  }
+
+  /** Ghi nhận cờ đã thực hiện hợp vật phẩm trong ngày hôm nay cho tài khoản (chuẩn hoá múi giờ TW UTC+8). */
+  recordCombineToday(accountId: string, dateKey = getTaiwanDateKey()): ItemLists {
+    const all = this.f.read();
+    const cKey = this.canonicalKey(accountId);
+    const cur = this.get(accountId);
+    cur.lastCombinedDate = dateKey;
+    this.f.write({ ...all, [cKey]: cur });
+    return cur;
+  }
+
+  /** Kiểm tra xem tài khoản đã thực hiện hợp vật phẩm trong ngày hôm nay chưa. */
+  hasCombinedToday(accountId: string, dateKey = getTaiwanDateKey()): boolean {
+    const cur = this.get(accountId);
+    return cur.lastCombinedDate === dateKey;
   }
 }
 
@@ -788,6 +805,21 @@ export class DailyChecklistStore {
       updatedAt: Date.now(),
     };
 
+    const all = this.f.read();
+    this.f.write({ ...all, [this.canonicalKey(accountId)]: cur });
+    return cur;
+  }
+
+  setProgress(accountId: string, itemKey: string, absoluteCount: number): DailyChecklistState {
+    const cur = this.get(accountId);
+    const def = DAILY_CHECKLIST_CATALOG.find((d) => d.key === itemKey);
+    const maxCount = def?.maxCount ?? 1;
+    const nextCount = Math.max(0, Math.min(maxCount, absoluteCount));
+    cur.items[itemKey] = {
+      currentCount: nextCount,
+      done: nextCount >= maxCount,
+      updatedAt: Date.now(),
+    };
     const all = this.f.read();
     this.f.write({ ...all, [this.canonicalKey(accountId)]: cur });
     return cur;

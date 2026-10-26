@@ -103,7 +103,7 @@ describe("WorldBossService — điều phối săn Boss Thế Giới", () => {
     expect(r.ok).toBe(true);
 
     const st = svc.stateFor("char1");
-    expect(st.totalAttempts).toBe(1);
+    expect(st.totalAttempts).toBe(5);
     expect(st.currentAttempt).toBe(0);
     expect(st.phase).toBe("preparing");
   });

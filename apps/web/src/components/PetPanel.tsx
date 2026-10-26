@@ -154,6 +154,17 @@ export function PetPanel({
     }
   };
 
+  const handleClaimEscort = async () => {
+    setActionLoading(true);
+    try {
+      await api.escortClaim(acc);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Mặc định chọn võ tướng đang xuất chiến, hoặc con đầu tiên trong danh sách
   const activePet = pets.find((p) => p.active);
   const sel = pets.find((p) => p.model === (selectedModel ?? activePet?.model ?? pets[0]?.model));
@@ -162,6 +173,7 @@ export function PetPanel({
   const escortState = ch.escort;
   const dailyCount = escortState?.dailyCount ?? 0;
   const isEscorting = Boolean(escortState?.activeEscort && Date.now() < escortState.activeEscort.endTime);
+  const isEscortDone = Boolean(escortState?.activeEscort && Date.now() >= escortState.activeEscort.endTime);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -279,13 +291,36 @@ export function PetPanel({
                     <span className={`chip ${sel.active ? "ok glow" : ""}`}>
                       {sel.active ? "Đang xuất chiến" : "Đang nghỉ"}
                     </span>
+                    {sel.active ? (
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        disabled={!can}
+                        onClick={() => act("pet_rest")}
+                        style={{ padding: "4px 14px", fontSize: 12, fontWeight: 600 }}
+                        title="Ngưng xuất chiến cho võ tướng này về trạng thái nghỉ"
+                      >
+                        Cho Nghỉ
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={!can}
+                        onClick={() => act("pet_out", { model: sel.model })}
+                        style={{ padding: "4px 14px", fontSize: 12, fontWeight: 600 }}
+                      >
+                        Xuất Chiến
+                      </button>
+                    )}
                     <button
-                      className="primary"
-                      disabled={!can || sel.active}
-                      onClick={() => act("pet_out", { model: sel.model })}
-                      style={{ padding: "4px 14px", fontSize: 12, fontWeight: 600 }}
+                      type="button"
+                      disabled={!can}
+                      onClick={() => act("spin_lap_ba", { slot: 1 })}
+                      style={{ padding: "4px 12px", fontSize: 12, fontWeight: 700, background: "#eab308", color: "#000", border: "none", borderRadius: 4, cursor: "pointer" }}
+                      title="Quay Xu Lạp Bá cho võ tướng slot 1 (tự động: đang xuất chiến -> cho nghỉ -> quay -> xuất chiến lại)"
                     >
-                      {sel.active ? "Đang Xuất Chiến" : "Xuất Chiến"}
+                      🎰 Quay Lạp Bá (Slot 1)
                     </button>
                   </div>
                 </div>
@@ -416,7 +451,27 @@ export function PetPanel({
                 </div>
               </div>
             )}
-            {!isEscorting && dailyCount >= 3 && (
+            {/* Trạng thái chuyến vận tiêu ĐÃ HOÀN THÀNH - CHỜ NHẬN THƯỞNG */}
+            {isEscortDone && escortState?.activeEscort && (
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(245, 158, 11, 0.15)", border: "1px solid #f59e0b", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span className="chip warn glow" style={{ fontWeight: 700 }}>HOÀN THÀNH</span>
+                  <span style={{ fontSize: 13 }}>
+                    Võ tướng: <b>{escortState.activeEscort.petName ?? `Ô ${escortState.activeEscort.slot}`}</b> (Ô {escortState.activeEscort.slot}) đã kết thúc vận tiêu!
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={actionLoading}
+                  onClick={() => void handleClaimEscort()}
+                  style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, padding: "6px 14px" }}
+                >
+                  <span>🎁</span> Nhận Thưởng Vận Tiêu
+                </button>
+              </div>
+            )}
+            {!isEscorting && !isEscortDone && dailyCount >= 3 && (
               <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(234, 179, 8, 0.1)", border: "1px solid #eab308", borderRadius: 6, fontSize: 12, color: "#eab308", fontWeight: 600 }}>
                 🎉 Đã hoàn thành toàn bộ 3 lượt vận tiêu trong ngày hôm nay! Hãy quay lại vào ngày mai (00:00 UTC+8).
               </div>

@@ -15,8 +15,8 @@ import skillDataRaw from "../../../data/skillData.json";
 import npcSkillsRaw from "../../../data/npcSkills.json";
 import petSkillProfilesRaw from "../../../data/petSkillProfiles.json";
 import dailyCheckinRewards from "../../../data/dailyCheckinRewards.json";
-import { DUNGEON_ROOM_CATALOG, DUNGEON_SOLO_CATALOG } from "@tsbot/protocol";
-import type { AutoHealConfig, BattleActionConfig, BattleConfig, BattleTurnConfig, BattleUnit, ChaseConfig, EscortActiveInfo, EscortPhase, EscortState, InnPetInfo, SkillInfo } from "@tsbot/protocol";
+import { DUNGEON_ROOM_CATALOG, DUNGEON_SOLO_CATALOG, getTaiwanDateKey } from "@tsbot/protocol";
+import type { AutoHealConfig, AutoMoveState, BattleActionConfig, BattleConfig, BattleTurnConfig, BattleUnit, ChaseConfig, EscortActiveInfo, EscortPhase, EscortState, InnPetInfo, SkillInfo } from "@tsbot/protocol";
 import type { CodecIO, CodecSession, ProtocolCodec } from "../codec";
 import { DUNGEON_ROOM_SUB, DungeonRoomTracker, createRoomPayload, isDungeonRoomAction, joinRoomPayload } from "./dungeonRoom";
 import { PARTY_SUB, PartyTracker, partyPayload, partyReplyPayload, normName } from "./party";
@@ -87,12 +87,16 @@ export function encodeFrame(body: Buffer): Buffer {
 const cmdBody = (cmd: number, sub: number, payload: number[] | Buffer = []) =>
   Buffer.concat([Buffer.from([0x00, 0x00, cmd, sub]), Buffer.from(payload)]);
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 class TsOnlineSession implements CodecSession {
   private buf: Buffer = Buffer.alloc(0);
   private uid?: Buffer;
   private onLogin?: (uid: Buffer) => void;
   private roster: { idx: number; model: number; exp: number; level: number; hp: number; sp: number; maxHp?: number; maxSp?: number; stats?: import("@tsbot/protocol").PetStats; gear: import("@tsbot/protocol").PetBonus; equippedItems?: number[]; isAwakened?: boolean }[] = [];
   private activeModel: number | undefined;
+  private battlePass?: { points: number; nextMilestone: number };
+  private lapBaResolve?: (res: { ok: boolean; expGained?: number; error?: string }) => void;
   /** Điểm cộng từ trang bị của NHÂN VẬT: 08/01 (mã thuộc tính 0x1d2 atk, 0x1d3 def, 0x1d4 int, 0x1d6 agi). Của võ tướng: 08/02 `00 04 <idx> 00 <mã>`. */
   private gear: import("@tsbot/protocol").PetBonus = { int: 0, atk: 0, def: 0, agi: 0 };
   private pet = { name: "", level: 0, hp: { cur: 0, max: 0 }, sp: { cur: 0, max: 0 }, exp: 0 } as import("@tsbot/protocol").UnitState;
@@ -191,10 +195,19 @@ class TsOnlineSession implements CodecSession {
     maxRadius: 150,
     autoReturn: true,
   };
+  private autoMove: AutoMoveState = {
+    enabled: false,
+    mapId: 0,
+    originX: 0,
+    originY: 0,
+    maxRadius: 150,
+  };
   private mapNpcs = new Map<number, { index: number; npcId?: number; x: number; y: number; busy: boolean; lastSeen: number }>();
   private chaseRunning = false;
   private chaseCheckTimer?: NodeJS.Timeout;
   private chaseIdleCycles = 0;
+  private autoMoveRunning = false;
+  private autoMoveTimer?: NodeJS.Timeout;
   private innPets: InnPetInfo[] = [];
   private activeEscort?: EscortActiveInfo;
   private escortPhase: EscortPhase = "idle";
@@ -208,6 +221,7 @@ class TsOnlineSession implements CodecSession {
       playerSkills: [],
       petSkills: [],
       chaseConfig: this.chaseConfig,
+      autoMove: this.autoMove,
       friends: [],
       innPets: [],
       escort: {
@@ -243,8 +257,10 @@ class TsOnlineSession implements CodecSession {
     else if (cmd === 0x0f && sub === 0x08 && f.length >= 24) this.petStats(f);
     else if (cmd === 0x08 && sub === 0x0e && f.length >= 15) this.propUpdate("player", f.readUInt16LE(9), f.readUInt32LE(11));
     else if (cmd === 0x13 && (sub === 0x04 || sub === 0x01) && f.length >= 11) this.petActive(f.readUInt16LE(9), sub === 0x01);
+    else if (cmd === 0x13 && sub === 0x02) this.petRest();
     else if (cmd === 0x02 && sub === 0x0a && f.length >= 16) this.sysMessage(f);
     else if (cmd === 0x54 && sub === 0x02 && f.length >= 12) this.shopReply(f);
+    else if (cmd === 0x54 && sub === 0x01) this.io.log("info", `[Lạp Bá 54/01] Server phản hồi len=${f.length} hex=${f.toString("hex")}`);
     else if (cmd === 0x53 && sub === 0x01 && f.length >= 13) this.mailList(f);
     else if (cmd === 0x53 && sub === 0x02 && f.length >= 17) this.mailAck(f.readUInt32LE(13));
     else if (cmd === 0x0e && sub === 0x05 && f.length >= 11) this.parseFriendList(f);
@@ -253,6 +269,22 @@ class TsOnlineSession implements CodecSession {
       const itemId = f.readUInt16LE(9);
       if (itemId === 45659) this.io.game("✨ [Rút bí cấp tướng] Nhận thành công bí cấp võ tướng!");
       else if (itemId === 45660) this.io.game("✨ [Rút thẻ tướng] Nhận thành công thẻ chiêu mộ võ tướng!");
+    }
+    else if (cmd === 0x4d && sub === 0x0b && f.length >= 13) {
+      // 4d/0b: S->C 00 | totalPoints u16 | nextMilestone u16
+      const points = f.readUInt16LE(9);
+      const nextMilestone = f.readUInt16LE(11);
+      this.battlePass = { points, nextMilestone };
+      this.io.log("info", `[Thông Hành] Điểm tích luỹ: ${points}, mốc quà kế tiếp: ${nextMilestone}`);
+    }
+    else if (cmd === 0x5b && sub === 0x02 && f.length >= 12) {
+      // 5b/02: S->C xác nhận cập nhật nhiệm vụ ngày
+      this.io.log("info", "[Nhiệm vụ ngày] Máy chủ xác nhận tiến độ nhiệm vụ ngày");
+    }
+    else if (cmd === 0x5b && sub === 0x03 && f.length >= 12) {
+      // 5b/03: S->C xác nhận nhận rương mốc tích luỹ
+      const boxIdx = f[12] ?? f[10] ?? 0;
+      this.io.game(`✨ [Nhiệm vụ ngày] Đã mở thành công rương mốc năng động ${boxIdx}!`);
     }
     else if (cmd === 0x08 && sub === 0x01 && f.length >= 15) {
       const prop = f.readUInt16LE(9);
@@ -348,6 +380,7 @@ class TsOnlineSession implements CodecSession {
     }
     else if (cmd === 0x17 && sub === 0x08 && f.length >= 16) this.bagSlot(f);
     else if (cmd === 0x17 && sub === 0x09 && f.length >= 10) this.bagRemove(f);
+    else if (cmd === 0x17 && sub === 0x0d && f.length >= 16) this.bagCombineResult(f);
     else if (cmd === 0x17 && sub === 0x66 && f.length >= 10) this.bankList(f);
     else if (cmd === 0x1d && sub === 0x09 && f.length >= 10) {
       this.setBankOpen(true);
@@ -363,6 +396,7 @@ class TsOnlineSession implements CodecSession {
     else if (cmd === 0x1f && sub === 0x06 && f.length >= 9) this.innPetsList(f);
     else if (cmd === 0x56 && sub === 0x03 && f.length >= 10) this.escortStatus(f);
     else if (cmd === 0x56 && sub === 0x02 && f.length >= 10) this.escortStartReply(f);
+    else if (cmd === 0x56 && sub === 0x05) this.escortClaimReply(f);
     else if (cmd === 0x59 && sub === 0x03 && f.length >= 10) {
       this.io.log("info", "💥 [Phân giải] Máy chủ xác nhận phân giải thành công.");
       if (this.sweepTimer) {
@@ -592,8 +626,17 @@ class TsOnlineSession implements CodecSession {
       // 08/02 `00 04 <idx> 00 <mã u16> <giá trị u32>`: idx = số thứ tự võ tướng trong túi (1..n), KHÔNG chỉ riêng pet xuất chiến
       const rec = this.roster.find((r) => r.idx === petIdx);
       if (rec) {
+        const prevExp = rec.exp;
         rec.exp = value;
-        if (rec !== this.activePet()) { this.publishPets(); return; } // pet đang nghỉ nhận exp (vd quà "Xu Lặp Ba") không được ghi đè thẻ pet xuất chiến
+        const gained = prevExp > 0 ? value - prevExp : 0;
+        this.lapBaResolve?.({ ok: true, expGained: gained });
+        if (rec !== this.activePet()) {
+          this.publishPets();
+          const pName = (npcNames as Record<string, string>)[String(rec.model)] ?? `#${rec.model}`;
+          this.io.game(`✨ [Xu Lạp Bá] Võ tướng ${pName} (slot ${petIdx}) nhận được ${gained > 0 ? `+${gained.toLocaleString("vi-VN")} ` : ""}exp!`);
+          this.io.log("info", `[Xu Lạp Bá] Võ tướng ${pName} (slot ${petIdx}) nhận exp: ${value.toLocaleString("vi-VN")}${gained > 0 ? ` (+${gained.toLocaleString("vi-VN")})` : ""}`);
+          return;
+        }
       }
     }
     const u = this[who];
@@ -879,6 +922,9 @@ class TsOnlineSession implements CodecSession {
     if (this.chaseConfig.enabled && this.location.map === this.chaseConfig.mapId) {
       this.scheduleChaseCheck(1200);
     }
+    if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
+      this.scheduleAutoMove(1200);
+    }
 
     // Xin danh sách kênh của map mới hoặc sau khi đổi kênh (như client thật)
     if (mapChanged || channelChanged) {
@@ -1063,6 +1109,7 @@ class TsOnlineSession implements CodecSession {
       exception: true,
     } as Record<string, boolean>,
   };
+  private lastCombinedDate?: string;
   private sweepingBag = false;
   private sweepTimer?: ReturnType<typeof setTimeout>;
   private autoSweepTimer?: ReturnType<typeof setInterval>;
@@ -1198,6 +1245,17 @@ class TsOnlineSession implements CodecSession {
     this.activeModel = model;
     if (this.roster.length) this.applyActivePet();
     if (confirm) this.io.game(MSG.petOut((npcNames as Record<string, string>)[String(model)] ?? `#${model}`));
+  }
+
+  /** 13/02: server xác nhận cho võ tướng nghỉ (ngưng xuất chiến) - theo capture Ngung xuat chien slot 1 & Quay lap ba slot 1.pcap */
+  private petRest() {
+    const oldPet = this.activePet();
+    this.activeModel = 0;
+    this.applyActivePet();
+    if (oldPet) {
+      const name = (npcNames as Record<string, string>)[String(oldPet.model)] ?? `#${oldPet.model}`;
+      this.io.game(`Võ tướng ${name} đã ngưng xuất chiến (về trạng thái nghỉ)`);
+    }
   }
 
   private activePet() {
@@ -1501,98 +1559,123 @@ class TsOnlineSession implements CodecSession {
       }
     }
 
-    // 3. TỰ HỢP / CHẾ TẠO (chỉ quét khi bật toggle combine)
-    if (this.autoLists.toggles.combine !== false && this.autoLists.combine.size > 0) {
-      const byId = new Map<number, { slot: number; qty: number }[]>();
-      for (const [slot, item] of this.bag) {
-        if (this.autoLists.combine.has(item.id)) {
-          const list = byId.get(item.id) ?? [];
-          list.push({ slot, qty: item.qty });
-          byId.set(item.id, list);
+    // 3. TỰ HỢP / CHẾ TẠO
+    // - Khi BẬT (combine !== false): Hợp tất cả các item trong danh sách đến khi hết nguyên liệu / full thùng đồ / lỗi 3 lần.
+    // - Khi TẮT (combine === false):
+    //    + Nếu không đủ item trong list để tạo thành cặp hợp: không xử lý gì cả.
+    //    + Nếu vẫn còn item trong thùng đồ: mỗi ngày tự động hợp 1 lần duy nhất để hoàn tất nhiệm vụ hàng ngày (Checklist Daily).
+    //    + Ghi nhớ cờ đã hợp trong ngày (lastCombinedDate) để relogin không bị làm mới/hợp tiếp.
+    if (this.autoLists.combine.size > 0) {
+      const isCombineToggleOn = this.autoLists.toggles.combine !== false;
+      const today = getTaiwanDateKey();
+      const hasCombinedToday = this.lastCombinedDate === today;
+
+      // Nếu toggle tắt VÀ hôm nay đã hợp rồi -> bỏ qua không xử lý
+      if (!isCombineToggleOn && hasCombinedToday) {
+        // Đã hoàn tất 1 lượt hợp trong ngày, không làm gì thêm
+      } else {
+        const byId = new Map<number, { slot: number; qty: number }[]>();
+        for (const [slot, item] of this.bag) {
+          if (this.autoLists.combine.has(item.id)) {
+            const list = byId.get(item.id) ?? [];
+            list.push({ slot, qty: item.qty });
+            byId.set(item.id, list);
+          }
         }
-      }
 
-      interface CombineCandidate {
-        slotA: number;
-        nameA: string;
-        slotB: number;
-        nameB: string;
-      }
-      const candidates: CombineCandidate[] = [];
+        interface CombineCandidate {
+          slotA: number;
+          nameA: string;
+          slotB: number;
+          nameB: string;
+        }
+        const candidates: CombineCandidate[] = [];
 
-      // Case A: Cùng itemId có tổng số lượng >= 2
-      for (const [id, slots] of byId) {
-        const totalQty = slots.reduce((sum, s) => sum + s.qty, 0);
-        if (totalQty >= 2) {
-          const name = (itemNames as Record<string, string>)[id] ?? `#${id}`;
-          // A1: Các ô có số lượng xếp chồng >= 2 (vd Bánh bao x100 trong 1 ô) -> hợp 2 item cùng ô đó (1x1)
-          for (const s of slots) {
-            if (s.qty >= 2) {
-              candidates.push({ slotA: s.slot, nameA: name, slotB: s.slot, nameB: name });
+        // Case A: Cùng itemId có tổng số lượng >= 2
+        for (const [id, slots] of byId) {
+          const totalQty = slots.reduce((sum, s) => sum + s.qty, 0);
+          if (totalQty >= 2) {
+            const name = (itemNames as Record<string, string>)[id] ?? `#${id}`;
+            // A1: Các ô có số lượng xếp chồng >= 2 (vd Bánh bao x100 trong 1 ô) -> hợp 2 item cùng ô đó (1x1)
+            for (const s of slots) {
+              if (s.qty >= 2) {
+                candidates.push({ slotA: s.slot, nameA: name, slotB: s.slot, nameB: name });
+              }
+            }
+            // A2: Cùng item nhưng nằm ở các ô khác nhau (mỗi ô có >= 1 item) -> hợp ô này với ô kia
+            for (let i = 0; i < slots.length; i++) {
+              for (let j = i + 1; j < slots.length; j++) {
+                candidates.push({ slotA: slots[i]!.slot, nameA: name, slotB: slots[j]!.slot, nameB: name });
+              }
             }
           }
-          // A2: Cùng item nhưng nằm ở các ô khác nhau (mỗi ô có >= 1 item) -> hợp ô này với ô kia
-          for (let i = 0; i < slots.length; i++) {
-            for (let j = i + 1; j < slots.length; j++) {
-              candidates.push({ slotA: slots[i]!.slot, nameA: name, slotB: slots[j]!.slot, nameB: name });
+        }
+
+        // Case B: 2 itemIds khác nhau trong danh sách hợp, mỗi loại còn item trong túi (tổng SL >= 1)
+        const distinctItems: { slot: number; id: number; name: string }[] = [];
+        for (const [id, slots] of byId) {
+          const totalQty = slots.reduce((sum, s) => sum + s.qty, 0);
+          if (totalQty >= 1) {
+            const name = (itemNames as Record<string, string>)[id] ?? `#${id}`;
+            const firstAvailable = slots.find((s) => s.qty >= 1);
+            if (firstAvailable) {
+              distinctItems.push({ slot: firstAvailable.slot, id, name });
             }
           }
         }
-      }
-
-      // Case B: 2 itemIds khác nhau trong danh sách hợp, mỗi loại còn item trong túi (tổng SL >= 1)
-      const distinctItems: { slot: number; id: number; name: string }[] = [];
-      for (const [id, slots] of byId) {
-        const totalQty = slots.reduce((sum, s) => sum + s.qty, 0);
-        if (totalQty >= 1) {
-          const name = (itemNames as Record<string, string>)[id] ?? `#${id}`;
-          const firstAvailable = slots.find((s) => s.qty >= 1);
-          if (firstAvailable) {
-            distinctItems.push({ slot: firstAvailable.slot, id, name });
+        for (let i = 0; i < distinctItems.length; i++) {
+          for (let j = i + 1; j < distinctItems.length; j++) {
+            const a = distinctItems[i]!;
+            const b = distinctItems[j]!;
+            candidates.push({ slotA: a.slot, nameA: a.name, slotB: b.slot, nameB: b.name });
           }
         }
-      }
-      for (let i = 0; i < distinctItems.length; i++) {
-        for (let j = i + 1; j < distinctItems.length; j++) {
-          const a = distinctItems[i]!;
-          const b = distinctItems[j]!;
-          candidates.push({ slotA: a.slot, nameA: a.name, slotB: b.slot, nameB: b.name });
-        }
-      }
 
-      if (candidates.length > 0) {
-        const match = candidates[Math.floor(Math.random() * candidates.length)]!;
-        const key = `combine:${match.slotA}:${match.slotB}`;
-        const attempts = (this.sweepAttempts.get(key) ?? 0) + 1;
-        this.sweepAttempts.set(key, attempts);
-        if (attempts <= 3) {
-          this.sweepingBag = true;
-          handledAny = true;
-          if (attempts === 3) {
-            this.io.game(`⚠️ [Tự động hợp] Đã thử 3 lần với ô ${match.slotA} và ${match.slotB}, tạm dừng công thức này.`);
-          } else if (match.slotA === match.slotB) {
-            this.io.game(`🧪 [Tự động hợp] Đã tự động chế tạo hợp thành 1x1 ${match.nameA}.`);
-            this.io.log("info", `[Tự động hợp] Hợp thành 1x1 ${match.nameA} tại ô ${match.slotA}`);
-          } else {
-            this.io.game(`🧪 [Tự động hợp] Đã tự động hợp thành ${match.nameA} và ${match.nameB}.`);
-            this.io.log("info", `[Tự động hợp] Hợp thành ${match.nameA} (ô ${match.slotA}) và ${match.nameB} (ô ${match.slotB})`);
+        if (candidates.length > 0) {
+          const match = candidates[Math.floor(Math.random() * candidates.length)]!;
+          const key = `combine:${match.slotA}:${match.slotB}`;
+          const attempts = (this.sweepAttempts.get(key) ?? 0) + 1;
+          this.sweepAttempts.set(key, attempts);
+          if (attempts <= 3) {
+            this.sweepingBag = true;
+            handledAny = true;
+            this.lastCombinedDate = today;
+
+            if (attempts === 3) {
+              this.io.game(`⚠️ [Tự động hợp] Đã thử 3 lần với ô ${match.slotA} và ${match.slotB}, tạm dừng công thức này.`);
+            } else if (!isCombineToggleOn) {
+              // Khi toggle tắt: hợp 1 lần duy nhất trong ngày để hoàn tất nhiệm vụ hàng ngày
+              if (match.slotA === match.slotB) {
+                this.io.game(`🧪 [Hợp hàng ngày] Tính năng hợp đang tắt: Tự động hợp 1x1 ${match.nameA} (1 lần/ngày) để hoàn tất nhiệm vụ hàng ngày.`);
+                this.io.log("info", `[Hợp hàng ngày] Hợp 1x1 ${match.nameA} tại ô ${match.slotA} hoàn tất daily`);
+              } else {
+                this.io.game(`🧪 [Hợp hàng ngày] Tính năng hợp đang tắt: Tự động hợp ${match.nameA} và ${match.nameB} (1 lần/ngày) để hoàn tất nhiệm vụ hàng ngày.`);
+                this.io.log("info", `[Hợp hàng ngày] Hợp ${match.nameA} (ô ${match.slotA}) và ${match.nameB} (ô ${match.slotB}) hoàn tất daily`);
+              }
+            } else if (match.slotA === match.slotB) {
+              this.io.game(`🧪 [Tự động hợp] Đã tự động chế tạo hợp thành 1x1 ${match.nameA}.`);
+              this.io.log("info", `[Tự động hợp] Hợp thành 1x1 ${match.nameA} tại ô ${match.slotA}`);
+            } else {
+              this.io.game(`🧪 [Tự động hợp] Đã tự động hợp thành ${match.nameA} và ${match.nameB}.`);
+              this.io.log("info", `[Tự động hợp] Hợp thành ${match.nameA} (ô ${match.slotA}) và ${match.nameB} (ô ${match.slotB})`);
+            }
+            // Gói 17/0e: 00 [slotA] [01 00 00 00] [slotB] [01 00 00 00] 00 00 00 00 00 01 (Chuẩn pcap hop vat pham.pcap - 25 bytes)
+            this.io.send(encodeFrame(cmdBody(0x17, 0x0e, [
+              0x00,
+              match.slotA & 0xff,
+              0x01, 0x00, 0x00, 0x00,
+              match.slotB & 0xff,
+              0x01, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            ])));
+            if (this.sweepTimer) clearTimeout(this.sweepTimer);
+            this.sweepTimer = setTimeout(() => {
+              this.sweepTimer = undefined;
+              this.sweepingBag = false;
+              this.triggerAutoSweep(manual);
+            }, 600);
+            return;
           }
-          // Gói 17/0e: 00 [slotA] [01] [slotB] [01] [slotA]
-          this.io.send(encodeFrame(cmdBody(0x17, 0x0e, [
-            0x00,
-            match.slotA & 0xff,
-            0x01,
-            match.slotB & 0xff,
-            0x01,
-            match.slotA & 0xff,
-          ])));
-          if (this.sweepTimer) clearTimeout(this.sweepTimer);
-          this.sweepTimer = setTimeout(() => {
-            this.sweepTimer = undefined;
-            this.sweepingBag = false;
-            this.triggerAutoSweep(manual);
-          }, 600);
-          return;
         }
       }
     }
@@ -2078,6 +2161,17 @@ class TsOnlineSession implements CodecSession {
     this.emitBag();
   }
 
+  /** 17/0d: thông báo kết quả hợp vật phẩm — `00 | itemId u16 | qty u32 | slot u8` (khớp pcap hop vat pham.pcap). */
+  private bagCombineResult(f: Buffer) {
+    const itemId = f.readUInt16LE(9);
+    const qty = f.readUInt32LE(11);
+    const slot = f[15]!;
+    const name = (itemNames as Record<string, string>)[itemId] ?? `#${itemId}`;
+    this.lastCombinedDate = getTaiwanDateKey();
+    this.io.game(`✨ [Hợp thành công] Nhận được ${qty > 1 ? `${qty}x ` : ""}${name} tại ô ${slot}.`);
+    this.io.log("info", `[Tự động hợp] Hợp thành công: nhận ${qty}x ${name} (id ${itemId}) tại ô ${slot}`);
+  }
+
   // ---------------------------------------------------------------- thông báo hệ thống 02/0a (dạng mẫu câu)
   /** Id câu trong TextData: 40476 "%s tăng %s điểm kinh nghiệm"; 71328/90166/90077 = túi đồ đầy. */
   private static readonly TXT_EXP_GAIN = 40476;
@@ -2168,6 +2262,16 @@ class TsOnlineSession implements CodecSession {
         this.io.game("🛒 [Phó bản đơn] Mua thêm lượt phó bản thành công (-10 Vàng)!");
       } else {
         this.io.game(`⚠️ [Phó bản đơn] Mua thêm lượt phó bản không thành công (kết quả ${f[11]})`);
+      }
+    } else if (offer === 0x0025) { // Offer 37: Xu Lạp Bá
+      this.io.log("info", `[Lạp Bá 54/02] Server phản hồi kết quả: ${f[11]} (hex=${f.toString("hex")})`);
+      if (f[11] === 0x01) {
+        this.lapBaResolve?.({ ok: true });
+      } else {
+        const errMsg = f[11] === 0x00
+          ? "Máy chủ từ chối: Võ tướng Tái sinh / Trùng sinh (Reborn 2) hoặc đã đạt giới hạn cấp độ không thể quay Xu Lạp Bá!"
+          : `Máy chủ từ chối quay (mã lỗi ${f[11]})`;
+        this.lapBaResolve?.({ ok: false, error: errMsg });
       }
     }
   }
@@ -2443,6 +2547,184 @@ class TsOnlineSession implements CodecSession {
     return { ok: false, message: `Hành động ${name} không hợp lệ` };
   }
 
+  /**
+   * Quay Xu Lạp Bá (đối chiếu capture Ngung xuat chien slot 1 & Quay lap ba slot 1.pcap):
+   * - Nếu pet ở slot chỉ định đang xuất chiến: cho nghỉ (13/02 00) -> mở (4c/05) -> hỏi offer/chọn tướng (54/01) -> quay (54/02) -> đóng (4c/05) -> xuất chiến lại (13/01)
+   * - Nếu pet đang nghỉ: mở (4c/05) -> hỏi offer/chọn tướng (54/01) -> quay (54/02) -> đóng (4c/05) lấy exp
+   */
+  private async spinLapBaAction(
+    args: string[],
+    write: (b: Buffer) => void,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; message?: string }> {
+    const targetSlot = Number(args[0]) || 1;
+    const petTarget = this.roster.find((r) => r.idx === targetSlot) ?? (targetSlot === 1 ? this.roster[0] : undefined);
+    if (!petTarget) {
+      return { ok: false, message: `Không tìm thấy võ tướng ở slot ${targetSlot}` };
+    }
+    const actualSlot = petTarget.idx;
+    const petName = (npcNames as Record<string, string>)[String(petTarget.model)] ?? `#${petTarget.model}`;
+    const currentActive = this.activePet();
+    const isTargetActive = petTarget === currentActive || (this.activeModel != null && petTarget.model === this.activeModel);
+
+    // Kiểm tra số lượng Xu Lạp Bá trong túi đồ (item 31207 hoặc 32939)
+    const lapBaItems = [...this.bag.values()].filter((it) => it.id === 31207 || it.id === 32939);
+    const totalLapBa = lapBaItems.reduce((acc, it) => acc + it.qty, 0);
+    if (this.bagLoaded && totalLapBa <= 0) {
+      this.io.game("⚠️ [Xu Lạp Bá] Trong túi đồ không có 'Xu Lạp Bá' (item 31207)! Vui lòng kiểm tra lại túi đồ.");
+      return { ok: false, message: "Trong túi đồ không có Xu Lạp Bá (item 31207)" };
+    }
+
+    this.io.game(`🎰 [Xu Lạp Bá] Chọn võ tướng: ${petName} (slot ${actualSlot}, model ${petTarget.model}, Lv ${petTarget.level}) | Nhân vật Lv ${this.player.level || "?"}`);
+
+    // Bước 1: nếu đang xuất chiến thì cho nghỉ trước (gói 13/02 00 chuẩn theo pcap)
+    if (isTargetActive) {
+      this.io.game(`🔄 [Xu Lạp Bá] Võ tướng ${petName} (slot ${actualSlot}) đang xuất chiến, cho về trạng thái nghỉ...`);
+      write(encodeFrame(cmdBody(0x13, 0x02, [0x00])));
+      await sleep(1000);
+      if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+    }
+
+    // Bước 2: quay Xu Lạp Bá nhận EXP
+    this.io.game(`🎰 [Xu Lạp Bá] Bắt đầu quay Xu Lạp Bá${totalLapBa > 0 ? ` (còn ${totalLapBa} Xu)` : ""} cho võ tướng ${petName} (slot ${actualSlot})...`);
+    // 2.1: Mở giao diện lạp bá (4c/05 00)
+    write(encodeFrame(cmdBody(0x4c, 0x05, [0x00])));
+    await sleep(800);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    const slotLow = actualSlot & 0xff;
+    const slotHigh = (actualSlot >> 8) & 0xff;
+    const modelLow = petTarget.model & 0xff;
+    const modelHigh = (petTarget.model >> 8) & 0xff;
+
+    // 2.2: Gửi gói 54/01 hỏi giá / chọn võ tướng đích cho offer lạp bá (0x0025 = offer 37 Lạp Bá)
+    write(encodeFrame(cmdBody(0x54, 0x01, [0x00, 0x25, 0x00, slotLow, slotHigh, modelLow, modelHigh])));
+    await sleep(800);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    // Tạo promise đợi phản hồi từ server (54/02 hoặc 08/02)
+    const waitPromise = new Promise<{ ok: boolean; expGained?: number; error?: string }>((resolve) => {
+      this.lapBaResolve = resolve;
+    });
+
+    // 2.3: Gửi gói 54/02 thực hiện quay (count = 1, offer = 0x0025, targetType = 0x04 (võ tướng), slot, model)
+    write(encodeFrame(cmdBody(0x54, 0x02, [0x00, 0x01, 0x25, 0x00, 0x04, slotLow, slotHigh, modelLow, modelHigh])));
+
+    // Chờ tối đa 3500ms
+    const timeoutPromise: Promise<{ ok: boolean; expGained?: number; error?: string }> = sleep(3500).then(() => ({ ok: false, error: "timeout" }));
+    const spinRes = await Promise.race([waitPromise, timeoutPromise]);
+    this.lapBaResolve = undefined;
+
+    // 2.4: Đóng / cập nhật lại lạp bá (4c/05 00)
+    write(encodeFrame(cmdBody(0x4c, 0x05, [0x00])));
+    await sleep(500);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    if (spinRes.ok) {
+      this.io.game(`✨ [Xu Lạp Bá] Hoàn tất quay Xu Lạp Bá cho võ tướng ${petName}${spinRes.expGained ? ` (+${spinRes.expGained.toLocaleString("vi-VN")} exp)` : ""}!`);
+      this.io.log("info", `[Xu Lạp Bá] Đã quay xong Xu Lạp Bá cho võ tướng ${petName} (slot ${actualSlot})${isTargetActive ? " và xuất chiến lại" : ""}`);
+    } else if (spinRes.error === "timeout") {
+      this.io.game(`⚠️ [Xu Lạp Bá] Đã gửi lệnh quay nhưng chưa nhận được phản hồi từ máy chủ`);
+    } else {
+      this.io.game(`⚠️ [Xu Lạp Bá] ${spinRes.error}`);
+    }
+
+    // Bước 3: nếu trước đó đang xuất chiến thì xuất chiến lại (gói 13/01 00 modelLow modelHigh)
+    if (isTargetActive) {
+      this.io.game(`⚔️ [Xu Lạp Bá] Xuất chiến lại võ tướng ${petName} (slot ${actualSlot})...`);
+      write(encodeFrame(cmdBody(0x13, 0x01, [0x00, modelLow, modelHigh])));
+      await sleep(600);
+    }
+
+    return spinRes.ok
+      ? { ok: true, message: `Quay Xu Lạp Bá thành công cho võ tướng ${petName} (slot ${actualSlot})` }
+      : { ok: false, message: spinRes.error === "timeout" ? "Máy chủ chưa phản hồi kết quả quay Xu Lạp Bá" : spinRes.error };
+  }
+
+  /**
+   * Nhận quà nhiệm vụ hàng ngày (khớp capture nhan qua nv hang ngay.pcap):
+   * Gói 5b/02 gửi danh sách 9 nhiệm vụ ngày -> Gói 5b/03 nhận 4 rương mốc tích luỹ năng động
+   */
+  private async dailyQuestClaimAction(
+    write: (b: Buffer) => void,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; message?: string }> {
+    this.io.game("📜 [Nhiệm vụ ngày] Đang gửi yêu cầu nhận toàn bộ quà nhiệm vụ hàng ngày...");
+    // 1. Gửi gói 5b/02 nhận 9 nhiệm vụ ngày (khớp pcap nhan qua nv hang ngay.pcap)
+    const tasksPayload = [
+      0x00, 0x09,
+      0x01, 0x00, 0x01, 0x2f, 0x00,
+      0x01, 0x00, 0x02, 0x30, 0x00,
+      0x01, 0x00, 0x03, 0x31, 0x00,
+      0x01, 0x00, 0x04, 0x32, 0x00,
+      0x01, 0x00, 0x05, 0x33, 0x00,
+      0x01, 0x00, 0x06, 0x34, 0x00,
+      0x01, 0x00, 0x07, 0x35, 0x00,
+      0x01, 0x00, 0x08, 0x36, 0x00,
+      0x01, 0x00, 0x09, 0x37, 0x00,
+    ];
+    write(encodeFrame(cmdBody(0x5b, 0x02, tasksPayload)));
+    await sleep(600);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    // 2. Gửi các gói 5b/03 nhận rương mốc điểm năng động (mốc 2, 4, 6, 8)
+    const boxMilestones = [
+      { idx: 2, boxId: 0x0030 },
+      { idx: 4, boxId: 0x0032 },
+      { idx: 6, boxId: 0x0034 },
+      { idx: 8, boxId: 0x0036 },
+    ];
+    for (const bm of boxMilestones) {
+      write(encodeFrame(cmdBody(0x5b, 0x03, [0x00, 0x01, 0x00, bm.idx, bm.boxId & 0xff, (bm.boxId >> 8) & 0xff])));
+      await sleep(400);
+      if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+    }
+
+    this.io.game("✨ [Nhiệm vụ ngày] Hoàn tất nhận toàn bộ quà nhiệm vụ và rương điểm năng động!");
+    this.io.log("info", "[Nhiệm vụ ngày] Đã gửi lệnh nhận quà 9 nhiệm vụ ngày và 4 rương mốc năng động");
+    return { ok: true, message: "Đã nhận quà nhiệm vụ ngày và các rương năng động thành công" };
+  }
+
+  /**
+   * Nhận quà Sổ Thông Hành (khớp capture nhan qua thong hanh.pcap):
+   * Mở 4d/0b 00 80 00 -> Quét các mốc 4d/0b 00 81 <mốc LE> -> Mở 4d/0b 00 80 01 -> Thu thập thư quà 53/01
+   */
+  private async battlePassClaimAction(
+    write: (b: Buffer) => void,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; message?: string }> {
+    this.io.game("🎫 [Thông Hành] Đang mở Sổ Thông Hành và kiểm tra mốc quà...");
+    // 1. Mở thông hành tab 0
+    write(encodeFrame(cmdBody(0x4d, 0x0b, [0x00, 0x80, 0x00])));
+    await sleep(400);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    // 2. Nhận các mốc quà thông hành khả dụng (4 mốc kế tiếp theo capture)
+    const startMilestone = this.battlePass?.nextMilestone || 58;
+    const maxScan = Math.min(startMilestone + 6, 100);
+    let claimCount = 0;
+    for (let m = startMilestone; m <= maxScan; m += 2) {
+      write(encodeFrame(cmdBody(0x4d, 0x0b, [0x00, 0x81, m & 0xff, (m >> 8) & 0xff])));
+      claimCount++;
+      await sleep(200);
+      if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+    }
+
+    // 3. Mở tab 1 (thông hành mở rộng)
+    write(encodeFrame(cmdBody(0x4d, 0x0b, [0x00, 0x80, 0x01])));
+    await sleep(300);
+    if (signal.aborted) return { ok: false, message: "Bị huỷ thao tác" };
+
+    // 4. Thu thập quà thư nếu quà được gửi vào hộp thư
+    try {
+      await this.mailClaimAll();
+    } catch {}
+
+    this.io.game(`✨ [Thông Hành] Hoàn tất nhận quà Sổ Thông Hành (đã quét ${claimCount} mốc quà và thu thập quà thư)!`);
+    this.io.log("info", `[Thông Hành] Đã gửi lệnh nhận các mốc quà thông hành từ mốc ${startMilestone} đến ${maxScan}`);
+    return { ok: true, message: "Đã nhận quà Sổ Thông Hành thành công" };
+  }
+
   // ---------------------------------------------------------------- Nhà Trọ & Vận Tiêu (1f/06, 56/01, 56/02, 56/03)
   private getEscortState(): EscortState {
     const dailyCount = this.counterMap.get(CTR_ESCORT)?.val ?? 0;
@@ -2508,6 +2790,17 @@ class TsOnlineSession implements CodecSession {
     if (f.length >= 27) {
       const startOle = f.readDoubleLE(11);
       const endOle = f.readDoubleLE(19);
+      if (startOle === 0 || endOle === 0) {
+        this.activeEscort = undefined;
+        for (const p of this.innPets) {
+          if (p.status === 1) p.status = 0;
+        }
+        this.escortPhase = (this.counterMap.get(CTR_ESCORT)?.val ?? 0) >= 3 ? "completed_daily" : "idle";
+        this.escortMessage = "Hiện không có chuyến vận tiêu nào đang chạy.";
+        this.io.patchState({ innPets: [...this.innPets], escort: this.getEscortState() });
+        return;
+      }
+
       const startTime = Math.round((startOle - 25569) * 86400 * 1000);
       const endTime = Math.round((endOle - 25569) * 86400 * 1000);
       const pet = this.innPets.find((p) => p.slot === slot);
@@ -2519,10 +2812,18 @@ class TsOnlineSession implements CodecSession {
         durationHours: Math.round(((endTime - startTime) / 3600000) * 10) / 10,
       };
       if (pet) pet.status = 1;
-      this.escortPhase = "escorting";
-      const timeStr = new Date(endTime).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-      this.escortMessage = `Võ tướng ô ${slot} (${pet?.name ?? "Pet"}) đang vận tiêu (dự kiến hoàn thành lúc ${timeStr}).`;
-      this.io.game(`🐎 [Vận Tiêu] ${this.escortMessage}`);
+
+      const now = Date.now();
+      if (now >= endTime) {
+        this.escortPhase = "reward_ready";
+        this.escortMessage = `Võ tướng ô ${slot} (${pet?.name ?? "Pet"}) đã hoàn thành chuyến vận tiêu! Đang sẵn sàng nhận thưởng.`;
+        this.io.game(`🎁 [Vận Tiêu] ${this.escortMessage}`);
+      } else {
+        this.escortPhase = "escorting";
+        const timeStr = new Date(endTime).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+        this.escortMessage = `Võ tướng ô ${slot} (${pet?.name ?? "Pet"}) đang vận tiêu (dự kiến hoàn thành lúc ${timeStr}).`;
+        this.io.game(`🐎 [Vận Tiêu] ${this.escortMessage}`);
+      }
       this.io.patchState({ innPets: [...this.innPets], escort: this.getEscortState() });
     }
   }
@@ -2534,6 +2835,19 @@ class TsOnlineSession implements CodecSession {
     if (pet) pet.status = 1;
     this.escortPhase = "escorting";
     this.io.game(`🐎 [Vận Tiêu] Bắt đầu chuyến vận tiêu thành công với võ tướng ô ${slot} (${pet?.name ?? "Pet"})!`);
+    this.io.patchState({ innPets: [...this.innPets], escort: this.getEscortState() });
+  }
+
+  /** S→C 56/05: Phản hồi nhận thưởng Vận Tiêu thành công. */
+  private escortClaimReply(f: Buffer) {
+    this.activeEscort = undefined;
+    for (const p of this.innPets) {
+      if (p.status === 1) p.status = 0;
+    }
+    const count = this.counterMap.get(CTR_ESCORT)?.val ?? 0;
+    this.escortPhase = count >= 3 ? "completed_daily" : "idle";
+    this.escortMessage = "Đã nhận thưởng hoàn tất chuyến vận tiêu! Võ tướng đã được giải phóng.";
+    this.io.game("🎁 [Vận Tiêu] Đã nhận phần thưởng hoàn tất chuyến vận tiêu thành công! Võ tướng đã được giải phóng.");
     this.io.patchState({ innPets: [...this.innPets], escort: this.getEscortState() });
   }
 
@@ -2549,6 +2863,15 @@ class TsOnlineSession implements CodecSession {
       write(encodeFrame(cmdBody(0x56, 0x01, [0x00])));
       await sleep(300);
       return { ok: true, message: "Đã gửi yêu cầu kiểm tra trạng thái vận tiêu" };
+    }
+
+    if (name === "escort_claim") {
+      this.io.game("🎁 [Vận Tiêu] Đang nhận phần thưởng hoàn thành Vận Tiêu (56/05)...");
+      write(encodeFrame(cmdBody(0x56, 0x05, [0x00, 0x01])));
+      await sleep(600);
+      write(encodeFrame(cmdBody(0x56, 0x01, [0x00])));
+      await sleep(300);
+      return { ok: true, message: "Đã gửi yêu cầu nhận thưởng vận tiêu" };
     }
 
     if (name === "escort_start") {
@@ -2741,6 +3064,10 @@ class TsOnlineSession implements CodecSession {
             clearTimeout(this.chaseCheckTimer);
             this.chaseCheckTimer = undefined;
           }
+          if (this.autoMoveTimer) {
+            clearTimeout(this.autoMoveTimer);
+            this.autoMoveTimer = undefined;
+          }
           this.chaseRunning = false;
         }
         break;
@@ -2816,7 +3143,6 @@ class TsOnlineSession implements CodecSession {
       if (me && !me.isLeader) return true;
       if (snap.leaderName && this.player.name && normName(snap.leaderName) !== normName(this.player.name)) return true;
     }
-    if (this.partyTargetConfig.role === "member") return true;
     return false;
   }
 
@@ -2996,9 +3322,8 @@ class TsOnlineSession implements CodecSession {
         return { ok: true };
       }
       case "leave_party": {
-        // ✅ pcap: `0d/04 00 <uid của chính mình>` (chủ PT gửi = giải tán đội). Chưa có pcap thành viên thường rời, giả định cùng layout.
+        // ✅ pcap: `0d/04 00 <uid của chính mình>` (chủ PT gửi = giải tán đội, thành viên gửi = rời đội).
         if (!self) return { ok: false, message: "Chưa biết UID của mình" };
-        if (!this.party.leaderOf(self)) return { ok: false, message: "Đang không ở trong đội nào" };
         this.sendParty(PARTY_SUB.LEAVE, partyPayload(self), "RỜI ĐỘI / GIẢI TÁN (uid chính mình)");
         this.party.remove(self);
         this.partyStatus = "";
@@ -3155,7 +3480,18 @@ class TsOnlineSession implements CodecSession {
         if (rec === this.activePet()) throw new Error("Võ tướng này đang xuất chiến rồi");
         return encodeFrame(cmdBody(0x13, 0x01, [0x00, model & 0xff, model >> 8]));
       }
-      case "pet_rest": throw new Error("Cho võ tướng nghỉ: chưa có gói tin (cap mới chỉ có thao tác chọn xuất chiến), cần capture thêm");
+      case "pet_rest": {
+        const act = this.activePet();
+        if (!act) throw new Error("Hiện không có võ tướng nào đang xuất chiến");
+        return encodeFrame(cmdBody(0x13, 0x02, [0x00]));
+      }
+      case "spin_lap_ba":
+      case "xu_lap_ba":
+      case "daily_quest_claim":
+      case "claim_daily_quests":
+      case "battle_pass_claim":
+      case "claim_battle_pass":
+        throw new Error(`${name}: cần chạy qua executeAction`);
       case "offline_exp_free": return this.offlineExpFree();
       case "offline_exp_info": return encodeFrame(cmdBody(0x57, 0x03, [0x00])); // làm mới bảng giá (client gửi khi mở popup)
       case "mail_claim_all": return this.mailClaimAll();
@@ -3377,6 +3713,19 @@ class TsOnlineSession implements CodecSession {
         }
         return encodeFrame(cmdBody(0x56, 0x02, [0x00, slot & 0xff]));
       }
+      case "escort_claim": return encodeFrame(cmdBody(0x56, 0x05, [0x00, 0x01]));
+      case "combine_item": {
+        const slotA = Number(args[0]) || 1;
+        const slotB = Number(args[1]) || slotA;
+        return encodeFrame(cmdBody(0x17, 0x0e, [
+          0x00,
+          slotA & 0xff,
+          0x01, 0x00, 0x00, 0x00,
+          slotB & 0xff,
+          0x01, 0x00, 0x00, 0x00,
+          0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ]));
+      }
       case "click":
       case "talk_npc": {
         const npcId = Number(args[0]) || 1;
@@ -3474,6 +3823,9 @@ class TsOnlineSession implements CodecSession {
               this.autoLists.sell = parseIds(args[5]);
             } else if (parsed && typeof parsed === "object") {
               this.autoLists.toggles = { ...this.autoLists.toggles, ...parsed };
+              if (typeof (parsed as Record<string, unknown>).lastCombinedDate === "string") {
+                this.lastCombinedDate = (parsed as Record<string, unknown>).lastCombinedDate as string;
+              }
             }
           } catch {}
         }
@@ -3482,6 +3834,9 @@ class TsOnlineSession implements CodecSession {
             const parsed = JSON.parse(args[6]);
             if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
               this.autoLists.toggles = { ...this.autoLists.toggles, ...parsed };
+              if (typeof (parsed as Record<string, unknown>).lastCombinedDate === "string") {
+                this.lastCombinedDate = (parsed as Record<string, unknown>).lastCombinedDate as string;
+              }
             }
           } catch {}
         }
@@ -3511,6 +3866,9 @@ class TsOnlineSession implements CodecSession {
               };
             }
           } catch {}
+        }
+        if (args[9] && typeof args[9] === "string" && args[9].trim()) {
+          this.lastCombinedDate = args[9].trim();
         }
         this.sweepAttempts.clear();
         this.sweepingBag = false;
@@ -3597,7 +3955,16 @@ class TsOnlineSession implements CodecSession {
     if (name === "pull_secret" || name === "pull_card" || name === "pull_all") {
       return this.pullHeroAction(name, args, signal);
     }
-    if (name === "open_inn" || name === "escort_start" || name === "escort_query") {
+    if (name === "spin_lap_ba" || name === "xu_lap_ba") {
+      return this.spinLapBaAction(args, write, signal);
+    }
+    if (name === "daily_quest_claim" || name === "claim_daily_quests") {
+      return this.dailyQuestClaimAction(write, signal);
+    }
+    if (name === "battle_pass_claim" || name === "claim_battle_pass") {
+      return this.battlePassClaimAction(write, signal);
+    }
+    if (name === "open_inn" || name === "escort_start" || name === "escort_query" || name === "escort_claim") {
       return this.innEscortAction(name, args, write, signal);
     }
     if (name === "auto") {
@@ -3605,6 +3972,17 @@ class TsOnlineSession implements CodecSession {
       this.battleConfig = { ...this.battleConfig, autoFight: args[0] !== "0" };
       this.io.patchState({ battleConfig: this.battleConfig });
       this.io.log("info", `[auto] Tự động đánh: ${this.battleConfig.autoFight ? "BẬT" : "TẮT"} (theo script)`);
+      return { ok: true };
+    }
+    if (name === "challenge_world_boss") {
+      this.io.log("info", "⚔️ [Boss Thế Giới] Bắt đầu chuỗi tương tác khiêu chiến Boss Thế Giới (NPC 45)...");
+      write(encodeFrame(cmdBody(0x20, 0x02, [0x00, 0x08])));
+      await sleep(150);
+      write(encodeFrame(cmdBody(0x14, 0x01, [0x00, 0x2d, 0x00])));
+      await sleep(1200);
+      write(encodeFrame(cmdBody(0x14, 0x09, [0x00, 0x1e])));
+      await sleep(200);
+      write(encodeFrame(cmdBody(0x14, 0x06, [0x00])));
       return { ok: true };
     }
     if (name === "execute_shop_transaction" || name === "shop_sell_and_buy") {
@@ -3834,6 +4212,28 @@ class TsOnlineSession implements CodecSession {
           await this.walkWaypoints([{ x: targetX, y: targetY }], write, signal);
           return { ok: true };
         }
+      }
+    }
+    if (name === "set_auto_move" && args.length >= 1) {
+      try {
+        let cfg: Partial<AutoMoveState>;
+        const first = args[0] ?? "";
+        if (first.startsWith("{")) {
+          cfg = JSON.parse(first);
+        } else {
+          const isEn = first === "1" || first === "true";
+          cfg = {
+            enabled: isEn,
+            mapId: Number(args[1]) || this.location.map || 0,
+            originX: Number(args[2]) || this.location.x || 0,
+            originY: Number(args[3]) || this.location.y || 0,
+            maxRadius: Number(args[4]) || 150,
+          };
+        }
+        this.updateAutoMove(cfg);
+        return { ok: true };
+      } catch (err: any) {
+        return { ok: false, message: err?.message || String(err) };
       }
     }
     if (name === "set_chase_config" && args.length >= 1) {
@@ -4386,6 +4786,10 @@ class TsOnlineSession implements CodecSession {
     if (this.chaseCheckTimer) {
       clearTimeout(this.chaseCheckTimer);
       this.chaseCheckTimer = undefined;
+    }
+    if (this.autoMoveTimer) {
+      clearTimeout(this.autoMoveTimer);
+      this.autoMoveTimer = undefined;
     }
     this.battleUnits = [];
     this.battleTurnIndex = 0;
@@ -5269,7 +5673,123 @@ class TsOnlineSession implements CodecSession {
         this.triggerAutoSweep();
         this.triggerAutoHeal();
         this.scheduleChaseCheck(700);
+        if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
+          this.scheduleAutoMove(1000);
+        }
       }, 500);
+    }
+  }
+
+  public updateAutoMove(cfg: Partial<AutoMoveState>) {
+    const prevEnabled = this.autoMove.enabled;
+    this.autoMove = {
+      ...this.autoMove,
+      ...cfg,
+    };
+    this.io.patchState({ autoMove: { ...this.autoMove } });
+    if (this.autoMove.enabled) {
+      this.io.game(`🚶 [Tự Động Di Chuyển] Kích hoạt tự động di chuyển tại Map ${this.autoMove.mapId} (${this.autoMove.originX}, ${this.autoMove.originY}) • Bán kính ${this.autoMove.maxRadius || 150}px (bước 30px).`);
+      this.scheduleAutoMove(200);
+    } else if (prevEnabled && !this.autoMove.enabled) {
+      this.io.game("🛑 [Tự Động Di Chuyển] Đã dừng tự động di chuyển.");
+      if (this.autoMoveTimer) {
+        clearTimeout(this.autoMoveTimer);
+        this.autoMoveTimer = undefined;
+      }
+    }
+  }
+
+  private scheduleAutoMove(delayMs = 1500) {
+    if (!this.autoMove.enabled || this.inBattle) return;
+    if (this.isMemberInParty()) return;
+    if (this.autoMoveTimer) clearTimeout(this.autoMoveTimer);
+    this.autoMoveTimer = setTimeout(() => {
+      this.autoMoveTimer = undefined;
+      void this.checkAndAutoMove();
+    }, delayMs);
+  }
+
+  private async checkAndAutoMove(): Promise<void> {
+    if (!this.autoMove.enabled) return;
+    if (this.inBattle) return;
+    if (this.autoMoveRunning) return;
+    if (this.location.map !== this.autoMove.mapId) return;
+    if (this.isMemberInParty()) return;
+
+    this.autoMoveRunning = true;
+    try {
+      const { originX, originY, maxRadius } = this.autoMove;
+      const curX = this.location.x;
+      const curY = this.location.y;
+      const STEP_SIZE = 30; // 30px theo yêu cầu người dùng
+      const MAX_DIST = maxRadius || 150; // không vượt quá 150px xung quanh điểm ban đầu
+
+      const currentDistFromOrigin = Math.hypot(curX - originX, curY - originY);
+      let nextX = curX;
+      let nextY = curY;
+
+      // 8 hướng di chuyển: 0, 45, 90, 135, 180, 225, 270, 315 độ
+      const angles = [
+        0,
+        Math.PI / 4,
+        Math.PI / 2,
+        (3 * Math.PI) / 4,
+        Math.PI,
+        (5 * Math.PI) / 4,
+        (3 * Math.PI) / 2,
+        (7 * Math.PI) / 4,
+      ];
+      const candidates: { x: number; y: number }[] = [];
+
+      for (const angle of angles) {
+        const candX = Math.round(curX + Math.cos(angle) * STEP_SIZE);
+        const candY = Math.round(curY + Math.sin(angle) * STEP_SIZE);
+        const dist = Math.hypot(candX - originX, candY - originY);
+        // Không vượt quá 150px xung quanh điểm ban đầu bật tự động di chuyển
+        if (dist <= MAX_DIST) {
+          candidates.push({ x: candX, y: candY });
+        }
+      }
+
+      if (candidates.length > 0) {
+        // Chọn ngẫu nhiên một hướng trong các hướng hợp lệ
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)]!;
+        nextX = chosen.x;
+        nextY = chosen.y;
+      } else {
+        // Nếu không có hướng nào (ở biên hoặc lệch ngoài bán kính), bước 30px quay về phía tâm ban đầu
+        const dx = originX - curX;
+        const dy = originY - curY;
+        const d = Math.hypot(dx, dy);
+        if (d > 0) {
+          const step = Math.min(STEP_SIZE, d);
+          nextX = Math.round(curX + (dx / d) * step);
+          nextY = Math.round(curY + (dy / d) * step);
+        }
+      }
+
+      if (nextX !== curX || nextY !== curY) {
+        const dir = this.getMoveDir(nextX - curX, nextY - curY);
+        this.io.send(encodeFrame(cmdBody(0x06, 0x01, [
+          0x00,
+          dir & 0xff,
+          nextX & 0xff,
+          (nextX >> 8) & 0xff,
+          nextY & 0xff,
+          (nextY >> 8) & 0xff,
+        ])));
+        this.location = { ...this.location, x: nextX, y: nextY };
+        this.io.patchState({ location: this.location });
+      }
+    } catch (err: any) {
+      if (err.message !== "Thao tác bị hủy") {
+        this.io.log("warn", `[Tự Động Di Chuyển] Lỗi: ${err?.message || err}`);
+      }
+    } finally {
+      this.autoMoveRunning = false;
+      if (this.autoMove.enabled && !this.inBattle) {
+        this.scheduleAutoMove(1800);
+      }
     }
   }
 

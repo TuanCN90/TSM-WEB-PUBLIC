@@ -52,6 +52,8 @@ export interface PartyHost {
   entries(): [string, GameConnection][];
   /** Đẩy lại character state (kèm partyPlan mới) lên UI. */
   pushCharacter(accountId: string): void;
+  isWorldBossRunning?(accountId: string): boolean;
+  isDungeonSoloRunning?(accountId: string): boolean;
 }
 
 interface Runtime {
@@ -95,9 +97,15 @@ export class PartyService {
 
   /** Tài khoản này đang là chủ PT với kế hoạch bật? (dùng để quyết định mirror/gather) */
   isActiveLeader(accountId: string): boolean {
+    if (this.host.isWorldBossRunning?.(accountId) || this.host.isDungeonSoloRunning?.(accountId)) {
+      return false;
+    }
     const leaderConn = this.host.entries().find(([id]) => canon(id) === canon(accountId))?.[1];
     const lch = leaderConn?.character();
     if (lch?.dungeonSolo && lch.dungeonSolo.phase !== "idle" && lch.dungeonSolo.phase !== "done" && lch.dungeonSolo.phase !== "error") {
+      return false;
+    }
+    if (lch?.worldBoss && lch.worldBoss.phase !== "idle" && lch.worldBoss.phase !== "done" && lch.worldBoss.phase !== "error") {
       return false;
     }
     const cfg = this.store.get(accountId);
@@ -156,9 +164,10 @@ export class PartyService {
         }
         try {
           const ch = o.conn.character();
-          // Nếu tài khoản đang chạy phó bản đơn -> tạm bỏ qua lập đội, gỡ chốt chặn partyGate
-          const inSolo = ch?.dungeonSolo && ch.dungeonSolo.phase !== "idle" && ch.dungeonSolo.phase !== "done" && ch.dungeonSolo.phase !== "error";
-          if (inSolo) {
+          // Nếu tài khoản đang chạy phó bản đơn hoặc Boss Thế Giới -> tạm bỏ qua lập đội, gỡ chốt chặn partyGate
+          const inSolo = this.host.isDungeonSoloRunning?.(o.id) || (ch?.dungeonSolo && ch.dungeonSolo.phase !== "idle" && ch.dungeonSolo.phase !== "done" && ch.dungeonSolo.phase !== "error");
+          const inBoss = this.host.isWorldBossRunning?.(o.id) || (ch?.worldBoss && ch.worldBoss.phase !== "idle" && ch.worldBoss.phase !== "done" && ch.worldBoss.phase !== "error");
+          if (inSolo || inBoss) {
             o.conn.partyGate = undefined;
             continue;
           }
@@ -233,6 +242,16 @@ export class PartyService {
     const inParty = (name: string) => party.joined && party.members.find((m) => m.name && norm(m.name) === norm(name));
     const entries: PartyPlanEntry[] = [];
     for (const m of cfg.members) {
+      const peer = this.byName(m.name);
+      if (peer && (this.host.isWorldBossRunning?.(peer.id) || this.host.isDungeonSoloRunning?.(peer.id))) {
+        entries.push({
+          name: m.name,
+          advisor: m.advisor,
+          status: "not_in_map",
+          detail: `Đang bận ${this.host.isWorldBossRunning?.(peer.id) ? "Boss Thế Giới" : "Phó bản đơn"}`,
+        });
+        continue;
+      }
       const slot = inParty(m.name);
       let status: PartyEntryStatus;
       let detail: string | undefined;
@@ -281,7 +300,6 @@ export class PartyService {
         }
       }
       // Ghi chú tài khoản tương ứng có đang online trên web không (chỉ để hiển thị).
-      const peer = this.byName(m.name);
       if (!slot && !peer && status === "not_in_map") detail = `${detail ?? ""}${detail ? " · " : ""}tài khoản "${m.name}" chưa online trên web`.trim();
       entries.push({ name: m.name, advisor: m.advisor, status, detail });
     }
@@ -318,6 +336,14 @@ export class PartyService {
       status = "error";
       detail = `Đang ở đội của "${party.leaderName}" — hãy rời đội trước`;
     } else {
+      const leaderPeer = this.byName(leader);
+      if (leaderPeer && (this.host.isWorldBossRunning?.(leaderPeer.id) || this.host.isDungeonSoloRunning?.(leaderPeer.id))) {
+        status = "not_in_map";
+        detail = `Chủ PT đang bận ${this.host.isWorldBossRunning?.(leaderPeer.id) ? "Boss Thế Giới" : "Phó bản đơn"}`;
+        const entries: PartyPlanEntry[] = [{ name: leader, advisor: false, status, detail }];
+        this.setPlan(accountId, rt, { enabled: true, role: "member", leaderName: leader, complete: false, entries, selfStatus: status, message: detail }, cfg);
+        return;
+      }
       const lastSend = rt.lastSend.get(leader) ?? 0;
       const lastProbe = rt.lastProbe.get(leader) ?? 0;
       if (now - rt.firstSeen < MEMBER_REQUEST_DELAY_MS) {
@@ -374,7 +400,9 @@ export class PartyService {
     for (const m of cfg.members) {
       if (!party.members.some((x) => x.name && norm(x.name) === norm(m.name))) continue;
       const p = this.byName(m.name);
-      if (p) out.push({ name: m.name, id: p.id, conn: p.conn });
+      if (p && !this.host.isWorldBossRunning?.(p.id) && !this.host.isDungeonSoloRunning?.(p.id)) {
+        out.push({ name: m.name, id: p.id, conn: p.conn });
+      }
     }
     return out;
   }
@@ -422,8 +450,13 @@ export class PartyService {
     const leaderConn = this.host.entries().find(([id]) => canon(id) === canon(accountId))?.[1];
     if (!leaderConn) return { ok: true };
     const lch = leaderConn.character();
-    // Bỏ qua chờ đội ngũ nếu đang trong phó bản đơn
-    if (lch?.dungeonSolo && lch.dungeonSolo.phase !== "idle" && lch.dungeonSolo.phase !== "done" && lch.dungeonSolo.phase !== "error") {
+    // Bỏ qua chờ đội ngũ nếu đang trong phó bản đơn hoặc Boss Thế Giới
+    if (
+      this.host.isWorldBossRunning?.(accountId) ||
+      this.host.isDungeonSoloRunning?.(accountId) ||
+      (lch?.dungeonSolo && lch.dungeonSolo.phase !== "idle" && lch.dungeonSolo.phase !== "done" && lch.dungeonSolo.phase !== "error") ||
+      (lch?.worldBoss && lch.worldBoss.phase !== "idle" && lch.worldBoss.phase !== "done" && lch.worldBoss.phase !== "error")
+    ) {
       leaderConn.partyGate = undefined;
       return { ok: true };
     }
@@ -444,8 +477,11 @@ export class PartyService {
         const missing: string[] = [];
         const party = lch?.party;
         for (const m of cfg.members) {
-          const inParty = !!party?.joined && party.members.some((x) => x.name && norm(x.name) === norm(m.name));
           const peer = this.byName(m.name);
+          if (peer && (this.host.isWorldBossRunning?.(peer.id) || this.host.isDungeonSoloRunning?.(peer.id))) {
+            continue;
+          }
+          const inParty = !!party?.joined && party.members.some((x) => x.name && norm(x.name) === norm(m.name));
           const pch = peer?.conn.character();
           if (!inParty) missing.push(`${m.name} (chưa vào đội${peer && pch!.location.map === map ? "; cùng map nhưng có thể KHÁC KÊNH" : ""})`);
           else if (!peer) missing.push(`${m.name} (offline)`);

@@ -137,6 +137,12 @@ export class DungeonSoloService {
     };
   }
 
+  isRunning(accountId: string): boolean {
+    const r = this.rt.get(canon(accountId));
+    if (!r) return false;
+    return r.phase !== "idle" && r.phase !== "done" && r.phase !== "error";
+  }
+
   private setPhase(r: Runtime, phase: DungeonSoloPhase, message: string) {
     r.phase = phase;
     r.phaseAt = Date.now();

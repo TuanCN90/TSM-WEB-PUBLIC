@@ -190,4 +190,29 @@ describe("ItemListStore", () => {
     expect(reloaded.get("tuancn11").autoHeal?.player.hpPct).toBe(80);
     expect(reloaded.get("tuancn12").autoHeal?.player.hpPct).toBe(50);
   });
+
+  it("supports recordCombineToday and hasCombinedToday with multi-account isolation and disk persistence", () => {
+    const store = new ItemListStoreClass();
+
+    expect(store.hasCombinedToday("tuancn11", "2026-10-27")).toBe(false);
+    expect(store.hasCombinedToday("tuancn12", "2026-10-27")).toBe(false);
+
+    // Ghi nhận cờ cho tuancn11
+    store.recordCombineToday("tuancn11@server1", "2026-10-27");
+    expect(store.hasCombinedToday("tuancn11", "2026-10-27")).toBe(true);
+    expect(store.hasCombinedToday("tuancn11@different_server", "2026-10-27")).toBe(true);
+    expect(store.get("tuancn11").lastCombinedDate).toBe("2026-10-27");
+
+    // tuancn12 không bị ảnh hưởng (Rule 2)
+    expect(store.hasCombinedToday("tuancn12", "2026-10-27")).toBe(false);
+    expect(store.get("tuancn12").lastCombinedDate).toBeUndefined();
+
+    // Sang ngày mới 2026-10-28 cờ ngày cũ tự hết hiệu lực
+    expect(store.hasCombinedToday("tuancn11", "2026-10-28")).toBe(false);
+
+    // Reload store (mô phỏng relogin / restart bot)
+    const reloaded = new ItemListStoreClass();
+    expect(reloaded.hasCombinedToday("tuancn11", "2026-10-27")).toBe(true);
+    expect(reloaded.hasCombinedToday("tuancn12", "2026-10-27")).toBe(false);
+  });
 });

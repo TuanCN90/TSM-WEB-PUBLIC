@@ -1,5 +1,6 @@
 import bagRefresh from "./fixtures/bag-refresh-type1.json";
 import { describe, expect, it } from "vitest";
+import { getTaiwanDateKey } from "@tsbot/protocol";
 import fx from "./fixtures/general-cap.json";
 import itemNames from "../src/data/itemNames.json";
 import { encodeFrame, tsOnlineCodec } from "../src/transport/socket/codecs/tsOnline";
@@ -623,8 +624,8 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
 
       s.encodeAction("set_item_lists", ["[]", "[]", "[]", "[]", JSON.stringify([46001]), JSON.stringify({ combine: true })]);
       expect(sent.length).toBe(1);
-      // Gói 17/0e 00 03 01 03 01 03
-      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e000301030103", "hex")).toString("hex"));
+      // Gói 17/0e chuẩn pcap (25 byte): 00 03 01 00 00 00 03 01 00 00 00 00 00 00 00 00 01
+      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e0003010000000301000000000000000001", "hex")).toString("hex"));
       expect(games.some((g) => g.includes("[Tự động hợp]"))).toBe(true);
     });
 
@@ -648,8 +649,8 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
       // List combine chứa cả 2 item: 46001 và 46002
       s.encodeAction("set_item_lists", ["[]", "[]", "[]", "[]", JSON.stringify([46001, 46002]), JSON.stringify({ combine: true })]);
       expect(sent.length).toBe(1);
-      // Gói 17/0e mix ô 2 và ô 5: 00 02 01 05 01 02
-      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e000201050102", "hex")).toString("hex"));
+      // Gói 17/0e mix ô 2 và ô 5 chuẩn pcap (25 byte): 00 02 01 00 00 00 05 01 00 00 00 00 00 00 00 00 01
+      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e0002010000000501000000000000000001", "hex")).toString("hex"));
       expect(games.some((g) => g.includes("[Tự động hợp]"))).toBe(true);
     });
 
@@ -677,8 +678,8 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
       // Bật chế tạo cho item 46001
       s.encodeAction("set_item_lists", ["[]", "[]", "[]", "[]", JSON.stringify([46001]), JSON.stringify({ combine: true })]);
       expect(sent.length).toBe(1);
-      // 17/0e 00 01 01 01 01 01: dùng 1 bánh bao ô 1 x 1 bánh bao ô 1
-      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e000101010101", "hex")).toString("hex"));
+      // 17/0e chuẩn pcap (25 byte): dùng 1 bánh bao ô 1 x 1 bánh bao ô 1
+      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e0001010000000101000000000000000001", "hex")).toString("hex"));
       expect(games.some((g) => g.includes("Đã tự động chế tạo hợp thành 1x1"))).toBe(true);
 
       // Giả lập server gửi 17/08 cập nhật số lượng còn lại = 98 (giảm 2)
@@ -688,7 +689,7 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
 
       // Lần quét kế tiếp tiếp tục hợp
       expect(sent.length).toBe(2);
-      expect(sent[1]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e000101010101", "hex")).toString("hex"));
+      expect(sent[1]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e0001010000000101000000000000000001", "hex")).toString("hex"));
 
       // Giả lập server gửi 17/08 cập nhật số lượng còn lại = 1 (SL <= 1)
       await new Promise((r) => setTimeout(r, 260));
@@ -702,6 +703,112 @@ describe("Tiền Trang & Thao tác Thùng Đồ (1e/02, 1e/01, 1e/04, 1e/05, 17/
       const slotRemove = Buffer.from("00001709000101000000", "hex");
       s.onData(encodeFrame(slotRemove));
       expect(bagState.length).toBe(0);
+    });
+
+    it("Khi toggle combine = false: nếu chưa hợp trong ngày và có item trong list thì hợp đúng 1 lần cho daily checklist", async () => {
+      const sent: Buffer[] = [];
+      const games: string[] = [];
+      const logs: string[] = [];
+      const s = tsOnlineCodec.create({
+        log(_lvl: string, m: string) { logs.push(m); },
+        game: (m: string) => games.push(m),
+        send: (b: Buffer) => sent.push(b),
+        patchState() {},
+      } as never);
+
+      // Ô 1 có Bánh bao (46001) SL = 10
+      const payload = Buffer.alloc(4 + 1 * 36);
+      payload.writeUInt16LE(1, 2);
+      payload[4] = 1;
+      payload.writeUInt16LE(46001, 5);
+      payload.writeUInt32LE(10, 7);
+      s.onData(encodeFrame(Buffer.concat([Buffer.from([0, 0, 0x17, 0x05]), payload])));
+
+      // Cài đặt danh sách có 46001, toggle combine = false, chưa có cờ hợp trong ngày
+      s.encodeAction("set_item_lists", [
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        JSON.stringify([46001]),
+        JSON.stringify({ combine: false }),
+      ]);
+
+      // Phải gửi đúng 1 lần
+      expect(sent.length).toBe(1);
+      expect(sent[0]!.toString("hex")).toBe(encodeFrame(Buffer.from("0000170e0001010000000101000000000000000001", "hex")).toString("hex"));
+      expect(games.some((g) => g.includes("[Hợp hàng ngày] Tính năng hợp đang tắt: Tự động hợp"))).toBe(true);
+
+      // Đợi timer và cập nhật túi đồ (vẫn còn 8 cái)
+      await new Promise((r) => setTimeout(r, 260));
+      const slotUpdate8 = Buffer.from("000017080001b1b308000000", "hex"); // slot 1, qty 8
+      s.onData(encodeFrame(slotUpdate8));
+
+      // Không gửi thêm gói nào nữa vì hôm nay đã hoàn thành 1 lần duy nhất
+      expect(sent.length).toBe(1);
+    });
+
+    it("Khi toggle combine = false: nếu đã có cờ hợp trong ngày (lastCombinedDate) thì không hợp tiếp", () => {
+      const sent: Buffer[] = [];
+      const games: string[] = [];
+      const s = tsOnlineCodec.create({
+        log() {},
+        game: (m: string) => games.push(m),
+        send: (b: Buffer) => sent.push(b),
+        patchState() {},
+      } as never);
+
+      // Ô 1 có Bánh bao (46001) SL = 10
+      const payload = Buffer.alloc(4 + 1 * 36);
+      payload.writeUInt16LE(1, 2);
+      payload[4] = 1;
+      payload.writeUInt16LE(46001, 5);
+      payload.writeUInt32LE(10, 7);
+      s.onData(encodeFrame(Buffer.concat([Buffer.from([0, 0, 0x17, 0x05]), payload])));
+
+      const today = getTaiwanDateKey();
+      // Đã có cờ hợp trong ngày hôm nay (relogin sau khi đã hợp)
+      s.encodeAction("set_item_lists", [
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        JSON.stringify([46001]),
+        JSON.stringify({ combine: false, lastCombinedDate: today }),
+      ]);
+
+      // Không gửi bất kỳ gói hợp nào
+      expect(sent.length).toBe(0);
+    });
+
+    it("Khi toggle combine = false: nếu không đủ item trong list thì không xử lý gì cả", () => {
+      const sent: Buffer[] = [];
+      const s = tsOnlineCodec.create({
+        log() {},
+        game() {},
+        send: (b: Buffer) => sent.push(b),
+        patchState() {},
+      } as never);
+
+      // Ô 1 có Bánh bao (46001) nhưng chỉ có SL = 1 (không đủ hợp 1x1 hoặc ghép đôi)
+      const payload = Buffer.alloc(4 + 1 * 36);
+      payload.writeUInt16LE(1, 2);
+      payload[4] = 1;
+      payload.writeUInt16LE(46001, 5);
+      payload.writeUInt32LE(1, 7);
+      s.onData(encodeFrame(Buffer.concat([Buffer.from([0, 0, 0x17, 0x05]), payload])));
+
+      s.encodeAction("set_item_lists", [
+        "[]",
+        "[]",
+        "[]",
+        "[]",
+        JSON.stringify([46001]),
+        JSON.stringify({ combine: false }),
+      ]);
+
+      // Không đủ nguyên liệu -> không gửi
+      expect(sent.length).toBe(0);
     });
   });
 

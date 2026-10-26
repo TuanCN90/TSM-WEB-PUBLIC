@@ -2,6 +2,7 @@
  * EscortService — Tự động VẬN TIÊU & NHÀ TRỌ (tối đa 3 lượt / ngày, cách nhau 4 giờ).
  * Phân lập độc lập 100% giữa các tài khoản theo Rule 2.
  * Tự động quét mỗi 30 phút. Chỉ cử DUY NHẤT pet được chỉ định trong dropdownlist đi vận tiêu.
+ * Tự động nhận quà hoàn tất chuyến vận tiêu và tiếp tục loop cho đến hết 3 lượt/ngày.
  */
 import type { GameConnection } from "@tsbot/engine";
 import type { EscortConfig, EscortState } from "@tsbot/protocol";
@@ -45,6 +46,24 @@ export class EscortService {
     this.timer = undefined;
   }
 
+  /** Nhận thưởng vận tiêu thủ công hoặc qua API. */
+  async claimFor(accountId: string): Promise<{ ok: boolean; message: string }> {
+    const conn = this.host.get(accountId);
+    if (!conn) return { ok: false, message: "Tài khoản chưa kết nối" };
+    try {
+      await conn.dispatch("escort_claim");
+      const ch = conn.character();
+      const dailyCount = ch?.escort?.dailyCount ?? 0;
+      if (this.checklistStore) {
+        this.checklistStore.setProgress(accountId, "escort", dailyCount);
+      }
+      this.host.pushCharacter(accountId);
+      return { ok: true, message: "Đã nhận phần thưởng hoàn tất Vận Tiêu thành công!" };
+    } catch (e) {
+      return { ok: false, message: `Lỗi nhận thưởng: ${(e as Error).message}` };
+    }
+  }
+
   /** Chạy quét ngay lập tức cho 1 tài khoản (bấm nút 'Vận Tiêu Ngay'). */
   async triggerFor(accountId: string): Promise<{ ok: boolean; message: string }> {
     const conn = this.host.get(accountId);
@@ -71,22 +90,22 @@ export class EscortService {
       const last = this.lastScan.get(cKey) ?? 0;
       const cfg = this.store.get(accountId);
 
-      // Nếu cấu hình auto bật và đã đến hạn 30 phút quét
+      // 1. Kiểm tra xem chuyến vận tiêu hiện tại đã hoàn tất (quá endTime) chưa
+      const ch = conn.character();
+      const active = ch?.escort?.activeEscort;
+      if (active && now >= active.endTime && !this.running.has(cKey)) {
+        conn.log(
+          "info",
+          `🎁 [Vận Tiêu] Chuyến vận tiêu của võ tướng ô ${active.slot} (${active.petName ?? "Pet"}) đã hoàn tất! Tự động nhận thưởng và xử lý lượt tiếp theo...`,
+        );
+        void this.processAccount(accountId, conn, false);
+        continue;
+      }
+
+      // 2. Nếu cấu hình auto bật và đã đến hạn 30 phút quét
       if (cfg.enabled && now - last >= SCAN_INTERVAL_MS) {
         this.lastScan.set(cKey, now);
         void this.processAccount(accountId, conn, false);
-      } else {
-        // Kiểm tra xem có chuyến vận tiêu nào vừa hoàn thành không (đã qua endTime)
-        const ch = conn.character();
-        const active = ch?.escort?.activeEscort;
-        if (active && now >= active.endTime && !this.running.has(cKey)) {
-          // Gửi truy vấn trạng thái để nhận thưởng / giải phóng pet
-          try {
-            await conn.dispatch("escort_query");
-          } catch {
-            // bỏ qua lỗi
-          }
-        }
       }
     }
   }
@@ -108,32 +127,84 @@ export class EscortService {
 
     this.running.add(cKey);
     try {
-      const ch = conn.character();
+      let ch = conn.character();
       if (!ch) return { ok: false, message: "Chưa tải xong dữ liệu nhân vật" };
 
-      // 1. Kiểm tra số lượt trong ngày
-      const dailyCount = ch.escort?.dailyCount ?? 0;
-      if (dailyCount >= 3) {
-        if (this.checklistStore) {
-          this.checklistStore.recordProgress(accountId, "escort", 3);
-        }
-        return { ok: true, message: "Đã hoàn thành tối đa 3/3 lượt vận tiêu hôm nay!" };
-      }
+      // Gửi truy vấn trạng thái mới nhất từ server
+      try {
+        await conn.dispatch("escort_query");
+        await new Promise((r) => setTimeout(r, 400));
+        ch = conn.character() ?? ch;
+      } catch {}
 
-      // 2. Kiểm tra xem có đang vận tiêu không
+      let dailyCount = ch.escort?.dailyCount ?? 0;
       const active = ch.escort?.activeEscort;
-      if (active && Date.now() < active.endTime) {
-        const remainingMin = Math.ceil((active.endTime - Date.now()) / 60000);
+      const now = Date.now();
+
+      // TRƯỜNG HỢP 1: Có chuyến vận tiêu ĐÃ HOÀN TẤT (now >= active.endTime) -> TỰ ĐỘNG NHẬN QUÀ
+      if (active && now >= active.endTime) {
+        conn.log(
+          "info",
+          `🎁 [Vận Tiêu] Chuyến vận tiêu ô ${active.slot} (${active.petName ?? "Pet"}) đã hoàn thành! Đang gửi gói 56/05 nhận thưởng và giải phóng pet...`,
+        );
+        try {
+          await conn.dispatch("escort_claim");
+          await new Promise((r) => setTimeout(r, 1200));
+          await conn.dispatch("escort_query");
+          await new Promise((r) => setTimeout(r, 400));
+        } catch (err: any) {
+          conn.log("warn", `[Vận Tiêu] Lỗi khi nhận thưởng: ${err?.message || err}`);
+        }
+
+        // Cập nhật lại character state và dailyCount sau khi nhận quà
+        ch = conn.character() ?? ch;
+        dailyCount = ch.escort?.dailyCount ?? dailyCount;
+
+        if (this.checklistStore) {
+          this.checklistStore.setProgress(accountId, "escort", dailyCount);
+        }
+
+        // Nếu đã hết 3 lượt trong ngày
+        if (dailyCount >= 3) {
+          conn.log("info", "🎉 [Vận Tiêu] Đã hoàn thành toàn bộ 3/3 lượt vận tiêu trong ngày hôm nay!");
+          if (this.checklistStore) {
+            this.checklistStore.setProgress(accountId, "escort", 3);
+          }
+          this.host.pushCharacter(accountId);
+          return {
+            ok: true,
+            message: "Đã nhận thưởng hoàn tất chuyến vận tiêu! Đã hoàn thành tối đa 3/3 lượt hôm nay.",
+          };
+        }
+
+        // Nếu vẫn còn lượt (dailyCount < 3), tiếp tục cử pet đi tiếp lượt tiếp theo!
+        conn.log("info", `🐎 [Vận Tiêu] Đã nhận thưởng xong. Tiếp tục cử võ tướng đi lượt tiếp theo (${dailyCount + 1}/3)...`);
+        await new Promise((r) => setTimeout(r, 1000));
+      } else if (active && now < active.endTime) {
+        // TRƯỜNG HỢP 2: Chuyến vận tiêu đang diễn ra
+        const remainingMin = Math.ceil((active.endTime - now) / 60000);
         return {
           ok: false,
           message: `Đang có chuyến vận tiêu diễn ra (còn khoảng ${remainingMin} phút)`,
         };
       }
 
-      // 3. Kiểm tra danh sách pet trong Nhà Trọ
+      // TRƯỜNG HỢP 3: Kiểm tra số lượt còn lại trong ngày trước khi bắt đầu lượt mới
+      ch = conn.character() ?? ch;
+      dailyCount = ch.escort?.dailyCount ?? 0;
+      if (dailyCount >= 3) {
+        if (this.checklistStore) {
+          this.checklistStore.setProgress(accountId, "escort", 3);
+        }
+        return {
+          ok: false,
+          message: "Đã hết lượt vận tiêu hôm nay (tối đa 3/3 lượt)!",
+        };
+      }
+
+      // 4. Kiểm tra danh sách pet trong Nhà Trọ
       let innPets = ch.innPets ?? [];
       if (innPets.length === 0) {
-        // Chưa có thông tin pet nhà trọ -> di chuyển đến Nhà Trọ để mở
         conn.log("info", "🏡 [Vận Tiêu] Chưa có dữ liệu Nhà Trọ, đang đến Khách Sạn Trác Quận để tải danh sách...");
         await conn.dispatch("open_inn");
         await new Promise((r) => setTimeout(r, 4000));
@@ -147,7 +218,7 @@ export class EscortService {
         };
       }
 
-      // 4. KIỂM THỬ RÀNG BUỘC CHẶT CHẼ: CHỈ CỬ DUY NHẤT PET ĐƯỢC CHỌN
+      // 5. KIỂM THỬ RÀNG BUỘC CHẶT CHẼ: CHỈ CỬ DUY NHẤT PET ĐƯỢC CHỌN
       const targetSlot = cfg.selectedPetSlot ?? 1;
       const targetPet = innPets.find((p) => p.slot === targetSlot);
 
@@ -169,17 +240,11 @@ export class EscortService {
         };
       }
 
-      // 5. Cử pet đã chọn đi vận tiêu
+      // 6. Cử pet đã chọn đi vận tiêu
       conn.log(
         "info",
         `🐎 [Vận Tiêu] Tiến hành cử võ tướng đã chọn: ${targetPet.name} (ô ${targetSlot}, Lv.${targetPet.level}) xuất phát vận tiêu...`,
       );
-
-      // Nếu đang không ở map 12007 (Khách sạn Trác Quận), warp đến đó trước
-      if (conn.character()?.location.map !== 12007) {
-        await conn.dispatch("open_inn");
-        await new Promise((r) => setTimeout(r, 3000));
-      }
 
       // Gửi lệnh bắt đầu vận tiêu
       await conn.dispatch("escort_start", { slot: String(targetSlot) });
@@ -189,14 +254,15 @@ export class EscortService {
       await conn.dispatch("escort_query");
 
       // Cập nhật tiến độ vào Daily Checklist
+      const updatedCount = dailyCount + 1;
       if (this.checklistStore) {
-        this.checklistStore.recordProgress(accountId, "escort", dailyCount + 1);
+        this.checklistStore.setProgress(accountId, "escort", updatedCount);
       }
 
       this.host.pushCharacter(accountId);
       return {
         ok: true,
-        message: `Đã cử thành công võ tướng ${targetPet.name} (ô ${targetSlot}) đi vận tiêu! (Lượt ${dailyCount + 1}/3)`,
+        message: `Đã cử thành công võ tướng ${targetPet.name} (ô ${targetSlot}) đi vận tiêu! (Lượt ${updatedCount}/3)`,
       };
     } catch (e) {
       return { ok: false, message: `Lỗi khi thực hiện vận tiêu: ${(e as Error).message}` };

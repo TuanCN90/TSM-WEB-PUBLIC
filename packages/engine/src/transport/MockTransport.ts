@@ -40,6 +40,13 @@ export class MockTransport implements Transport {
       maxRadius: 150,
       autoReturn: true,
     },
+    autoMove: {
+      enabled: false,
+      mapId: 12001,
+      originX: 0,
+      originY: 0,
+      maxRadius: 150,
+    },
     bag: [
       { slot: 1, id: 46285, qty: 4 }, { slot: 2, id: 20001, qty: 1 }, { slot: 5, id: 46029, qty: 3 },
       { slot: 7, id: 51789, qty: 1 }, { slot: 13, id: 46038, qty: 40 }, { slot: 28, id: 65401, qty: 1 },
@@ -185,6 +192,23 @@ export class MockTransport implements Transport {
         });
         break;
       }
+      case "set_auto_move": {
+        const enabled = cmd.args[0] === "1" || cmd.args[0] === "true";
+        const mapId = Number(cmd.args[1]) || (this.state.autoMove?.mapId || this.state.location.map || 0);
+        const originX = Number(cmd.args[2]) || (this.state.autoMove?.originX || this.state.location.x || 0);
+        const originY = Number(cmd.args[3]) || (this.state.autoMove?.originY || this.state.location.y || 0);
+        const maxRadius = Number(cmd.args[4]) || (this.state.autoMove?.maxRadius || 150);
+        this.emit({
+          autoMove: {
+            enabled,
+            mapId,
+            originX,
+            originY,
+            maxRadius,
+          },
+        });
+        break;
+      }
       case "start_dungeon":
       case "pvp":
         this.emit({ inBattle: true });
@@ -300,6 +324,22 @@ export class MockTransport implements Transport {
         });
         break;
       }
+      case "escort_claim": {
+        const innPets = (this.state.innPets || []).map((p) => ({ ...p, status: 0 }));
+        const curCount = this.state.escort?.dailyCount ?? 0;
+        this.emit({
+          innPets,
+          escort: {
+            phase: curCount >= 3 ? "completed_daily" : "idle",
+            dailyCount: curCount,
+            maxDailyCount: 3,
+            activeEscort: undefined,
+            message: "Đã nhận thưởng hoàn tất vận tiêu",
+            updatedAt: Date.now(),
+          },
+        });
+        break;
+      }
       case "escort_query": {
         break;
       }
@@ -338,6 +378,22 @@ export class MockTransport implements Transport {
       case "execute_shop_transaction":
       case "dungeon":
       case "dungeon_buy":
+        break;
+      case "pet_rest": {
+        const pets = (this.state.pets || []).map((p) => ({ ...p, active: false }));
+        this.emit({ pet: { name: "", level: 0, hp: { cur: 0, max: 0 }, sp: { cur: 0, max: 0 }, exp: 0 }, pets });
+        break;
+      }
+      case "spin_lap_ba": {
+        const slot = Number(cmd.args[0]) || 1;
+        const pets = (this.state.pets || []).map((p) => (p.idx === slot ? { ...p, exp: p.exp + 10000 } : p));
+        this.emit({ pets });
+        break;
+      }
+      case "daily_quest_claim":
+      case "claim_daily_quests":
+      case "battle_pass_claim":
+      case "claim_battle_pass":
         break;
       case "dungeon_room_create":
         this.emit({ dungeonRoom: { status: "open", roomId: 101, ready: true } });

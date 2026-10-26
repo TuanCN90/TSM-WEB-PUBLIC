@@ -493,4 +493,106 @@ describe("Võ tướng xuất chiến (0f/08 + 13/04)", () => {
     expect(vkcd.enabled).toBe(true);
     expect(vkcd.disabledReason).toBeUndefined();
   });
+
+  describe("Ngưng xuất chiến & Quay Xu Lạp Bá (13/02, 54/01, 54/02, 4c/05)", () => {
+    it("pet_rest encode đúng gói 13/02 00 và khi nhận 13/02 chuyển pet về trạng thái nghỉ", () => {
+      const { s, state, gameLogs } = session();
+      s.onData(frame(0x0f, 0x08, PETS_0F08));
+      s.onData(frame(0x13, 0x04, "00a9a1")); // Nhạn Điêu Tuyết xuất chiến
+      expect(state.pet?.name).toContain("Nhạn");
+
+      // Mã hóa lệnh cho pet nghỉ: 13/02 00 (theo pcap Ngung xuat chien slot 1 & Quay lap ba slot 1.pcap)
+      const restFrame = s.encodeAction("pet_rest");
+      const unxor = Buffer.from(restFrame);
+      for (let i = 2; i < unxor.length; i++) unxor[i] ^= 0xad;
+      expect(unxor.subarray(6)).toEqual(Buffer.from([0x13, 0x02, 0x00]));
+
+      // Server phản hồi 13/02: xác nhận ngưng xuất chiến
+      s.onData(frame(0x13, 0x02, "00"));
+      expect(state.pet?.name).toBe("");
+      expect(state.pets?.every((p: any) => !p.active)).toBe(true);
+      expect(gameLogs.at(-1)).toContain("đã ngưng xuất chiến");
+    });
+
+    it("spin_lap_ba slot 1 khi pet 1 đang xuất chiến: cho nghỉ -> quay xu -> xuất chiến lại", async () => {
+      const { s } = session();
+      s.onData(frame(0x0f, 0x08, PETS_0F08));
+      // Pet 1 trong PETS_0F08 có model = 0x36b9 = 14009
+      s.onData(frame(0x13, 0x04, "00b936")); // Pet 1 xuất chiến
+
+      const sentPkt: Buffer[] = [];
+      const res = await s.executeAction!(
+        "spin_lap_ba",
+        ["1"],
+        (b) => {
+          sentPkt.push(b);
+          const u = Buffer.from(b);
+          for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+          if (u[6] === 0x54 && u[7] === 0x02) {
+            setTimeout(() => s.onData(frame(0x54, 0x02, "00250001")), 10);
+          }
+        },
+        new AbortController().signal,
+      );
+
+      expect(res).toEqual({ ok: true, message: expect.stringContaining("Quay Xu Lạp Bá thành công") });
+
+      // Giải mã các gói tin đã gửi qua write
+      const dec = sentPkt.map((b) => {
+        const u = Buffer.from(b);
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // 1. Cho nghỉ: 13/02 00
+      expect(dec[0]).toEqual(Buffer.from([0x13, 0x02, 0x00]));
+      // 2. Mở lạp bá: 4c/05 00
+      expect(dec[1]).toEqual(Buffer.from([0x4c, 0x05, 0x00]));
+      // 3. Khởi tạo/chọn võ tướng: 54/01 00 25 00 01 00 b9 36
+      expect(dec[2]).toEqual(Buffer.from([0x54, 0x01, 0x00, 0x25, 0x00, 0x01, 0x00, 0xb9, 0x36]));
+      // 4. Quay lạp bá: 54/02 00 01 25 00 04 01 00 b9 36 (slot 1, model 14009)
+      expect(dec[3]).toEqual(Buffer.from([0x54, 0x02, 0x00, 0x01, 0x25, 0x00, 0x04, 0x01, 0x00, 0xb9, 0x36]));
+      // 5. Đóng lạp bá: 4c/05 00
+      expect(dec[4]).toEqual(Buffer.from([0x4c, 0x05, 0x00]));
+      // 6. Xuất chiến lại: 13/01 00 b9 36
+      expect(dec[5]).toEqual(Buffer.from([0x13, 0x01, 0x00, 0xb9, 0x36]));
+    }, 15000);
+
+    it("spin_lap_ba slot 1 khi pet 1 đang nghỉ: chỉ quay xu, không cho nghỉ và không xuất chiến lại", async () => {
+      const { s } = session();
+      s.onData(frame(0x0f, 0x08, PETS_0F08));
+      // Pet 2 xuất chiến, Pet 1 đang nghỉ
+      s.onData(frame(0x13, 0x04, "00a9a1"));
+
+      const sentPkt: Buffer[] = [];
+      const res = await s.executeAction!(
+        "spin_lap_ba",
+        ["1"],
+        (b) => {
+          sentPkt.push(b);
+          const u = Buffer.from(b);
+          for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+          if (u[6] === 0x54 && u[7] === 0x02) {
+            setTimeout(() => s.onData(frame(0x54, 0x02, "00250001")), 10);
+          }
+        },
+        new AbortController().signal,
+      );
+
+      expect(res?.ok).toBe(true);
+
+      const dec = sentPkt.map((b) => {
+        const u = Buffer.from(b);
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // Gồm 4 gói: 4c/05, 54/01, 54/02, 4c/05 (không có 13/02 và 13/01)
+      expect(dec).toHaveLength(4);
+      expect(dec[0]).toEqual(Buffer.from([0x4c, 0x05, 0x00]));
+      expect(dec[1]).toEqual(Buffer.from([0x54, 0x01, 0x00, 0x25, 0x00, 0x01, 0x00, 0xb9, 0x36]));
+      expect(dec[2]).toEqual(Buffer.from([0x54, 0x02, 0x00, 0x01, 0x25, 0x00, 0x04, 0x01, 0x00, 0xb9, 0x36]));
+      expect(dec[3]).toEqual(Buffer.from([0x4c, 0x05, 0x00]));
+    }, 15000);
+  });
 });

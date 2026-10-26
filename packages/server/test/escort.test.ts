@@ -69,6 +69,19 @@ describe("EscortService — Vận Tiêu & Nhà Trọ", () => {
       log: (_level: string, msg: string) => logs.push(msg),
       dispatch: async (action: string, params?: Record<string, string | number>) => {
         dispatched.push({ action, params });
+        if (action === "escort_claim") {
+          const nextPets = (state.innPets || []).map((p) => ({ ...p, status: 0 }));
+          state = {
+            ...state,
+            innPets: nextPets,
+            escort: {
+              phase: (state.escort?.dailyCount ?? 0) >= 3 ? "completed_daily" : "idle",
+              dailyCount: state.escort?.dailyCount ?? 0,
+              maxDailyCount: 3,
+              activeEscort: undefined,
+            },
+          };
+        }
         if (action === "escort_start") {
           const slot = Number(params?.slot) || 1;
           const nextPets = (state.innPets || []).map((p) => (p.slot === slot ? { ...p, status: 1 } : p));
@@ -149,7 +162,7 @@ describe("EscortService — Vận Tiêu & Nhà Trọ", () => {
     expect(mock.logs.some((l) => l.includes("TUYỆT ĐỐI KHÔNG DÙNG PET KHÁC"))).toBe(true);
   });
 
-  it("chặn không cho vận tiêu nếu đã hoàn thành 3/3 lượt trong ngày", async () => {
+  it("chặn không cho vận tiêu nếu đã hoàn thành 3/3 lượt trong ngày và báo lỗi", async () => {
     const configStore = new EscortConfigStore();
     configStore.set("acc1", { enabled: true, selectedPetSlot: 1 });
 
@@ -169,8 +182,48 @@ describe("EscortService — Vận Tiêu & Nhà Trọ", () => {
     const service = new EscortService(host, configStore);
     const result = await service.triggerFor("acc1");
 
-    expect(result.ok).toBe(true);
-    expect(result.message).toContain("Đã hoàn thành tối đa 3/3 lượt");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Đã hết lượt vận tiêu hôm nay");
     expect(mock.dispatched.some((d) => d.action === "escort_start")).toBe(false);
+  });
+
+  it("khi chuyến vận tiêu hoàn tất (quá endTime), tự động nhận quà và cử pet đi tiếp lượt tiếp theo", async () => {
+    const configStore = new EscortConfigStore();
+    const checklistStore = new DailyChecklistStore("daily-checklist-test2.json");
+    configStore.set("acc1", { enabled: true, selectedPetSlot: 1, selectedPetName: "Thái Văn Cơ" });
+
+    // Mock trạng thái đã đi lượt 1 và đã hoàn tất (endTime trong quá khứ)
+    const mock = makeMockConn({
+      innPets: [
+        { slot: 1, model: 14101, name: "Thái Văn Cơ", level: 1, exp: 6, hp: 205, status: 1 },
+      ],
+      escort: {
+        phase: "reward_ready",
+        dailyCount: 1,
+        maxDailyCount: 3,
+        activeEscort: {
+          slot: 1,
+          petName: "Thái Văn Cơ",
+          startTime: Date.now() - 5 * 3600 * 1000,
+          endTime: Date.now() - 1 * 3600 * 1000,
+          durationHours: 4,
+        },
+      },
+    });
+    const host: EscortHost = {
+      entries: () => [["acc1", mock.conn]],
+      get: (id: string) => (id === "acc1" ? mock.conn : undefined),
+      pushCharacter: () => {},
+    };
+
+    const service = new EscortService(host, configStore, checklistStore);
+    const result = await service.triggerFor("acc1");
+
+    expect(result.ok).toBe(true);
+    // Phải có lệnh nhận quà (escort_claim)
+    expect(mock.dispatched.some((d) => d.action === "escort_claim")).toBe(true);
+    // Và tiếp tục cử pet đi tiếp lượt 2 (escort_start)
+    expect(mock.dispatched.some((d) => d.action === "escort_start" && String(d.params?.slot) === "1")).toBe(true);
+    expect(checklistStore.get("acc1").items.escort?.currentCount).toBe(2);
   });
 });

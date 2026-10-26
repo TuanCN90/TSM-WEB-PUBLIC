@@ -92,6 +92,12 @@ export function DailyChecklistModal({ open, onClose, selectedAccountId }: DailyC
         await api.dispatch(activeAccount, "pull_card");
       } else if (key === "pull_all") {
         await api.dispatch(activeAccount, "pull_all");
+      } else if (key === "xu_lap_ba") {
+        await api.dispatch(activeAccount, "spin_lap_ba");
+      } else if (key === "daily_quest_reward") {
+        await api.dispatch(activeAccount, "daily_quest_claim");
+      } else if (key === "battle_pass_reward") {
+        await api.dispatch(activeAccount, "battle_pass_claim");
       } else if (key === "escort") {
         await api.escortRun(activeAccount);
       }
@@ -470,6 +476,78 @@ export function DailyChecklistModal({ open, onClose, selectedAccountId }: DailyC
                         title="Rút 1 thẻ chiêu mộ võ tướng (tiêu 9.000 Xu)"
                       >
                         {actionLoading[def.key] ? "Đang rút..." : "🃏 Rút (9k xu)"}
+                      </button>
+                    )}
+                    {!isDone && def.key === "xu_lap_ba" && (
+                      <button
+                        type="button"
+                        style={{
+                          padding: "3px 10px",
+                          borderRadius: 6,
+                          background: "#eab308",
+                          color: "#000",
+                          border: "none",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: actionLoading[def.key] ? "wait" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          opacity: actionLoading[def.key] ? 0.7 : 1,
+                        }}
+                        disabled={actionLoading[def.key]}
+                        onClick={(e) => void handleRunAction(e, def.key)}
+                        title="Quay Xu Lạp Bá cho võ tướng slot 1 (tự động: đang xuất chiến -> cho nghỉ -> quay -> xuất chiến lại)"
+                      >
+                        {actionLoading[def.key] ? "Đang quay..." : "🎰 Quay Xu (Slot 1)"}
+                      </button>
+                    )}
+                    {!isDone && def.key === "daily_quest_reward" && (
+                      <button
+                        type="button"
+                        style={{
+                          padding: "3px 10px",
+                          borderRadius: 6,
+                          background: "#10b981",
+                          color: "#fff",
+                          border: "none",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: actionLoading[def.key] ? "wait" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          opacity: actionLoading[def.key] ? 0.7 : 1,
+                        }}
+                        disabled={actionLoading[def.key]}
+                        onClick={(e) => void handleRunAction(e, def.key)}
+                        title="Nhận full 9 nhiệm vụ ngày và 4 rương mốc năng động"
+                      >
+                        {actionLoading[def.key] ? "Đang nhận..." : "🎁 Nhận quà NV ngày"}
+                      </button>
+                    )}
+                    {!isDone && def.key === "battle_pass_reward" && (
+                      <button
+                        type="button"
+                        style={{
+                          padding: "3px 10px",
+                          borderRadius: 6,
+                          background: "#f97316",
+                          color: "#fff",
+                          border: "none",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: actionLoading[def.key] ? "wait" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4,
+                          opacity: actionLoading[def.key] ? 0.7 : 1,
+                        }}
+                        disabled={actionLoading[def.key]}
+                        onClick={(e) => void handleRunAction(e, def.key)}
+                        title="Nhận tất cả mốc quà Thông Hành (Battle Pass) đã đạt điểm và thu thập quà thư"
+                      >
+                        {actionLoading[def.key] ? "Đang nhận..." : "🎫 Nhận Thông Hành"}
                       </button>
                     )}
                     {!isDone && def.key === "escort" && (

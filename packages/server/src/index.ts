@@ -8,7 +8,7 @@ import Fastify from "fastify";
 import type { WebSocket } from "ws";
 import { CUSTOM_SCRIPTS_DIR, ROOT } from "./services/paths";
 import { ConnectionManager, HttpError } from "./services/connections";
-import { ITEM_LIST_KEYS, type ItemListKey } from "@tsbot/protocol";
+import { ITEM_LIST_KEYS, getTaiwanDateKey, type ItemListKey } from "@tsbot/protocol";
 import { AccountStore, BattleConfigStore, ChaseConfigStore, CUSTOM_PREFIX, ItemListStore, RunnableRegistry, ScriptStore, ServerStore, SettingsStore } from "./services/store";
 
 const VERSION = "0.1.1"; // 2026-10-20 multi-map navigation update
@@ -199,6 +199,9 @@ app.put<{ Params: { id: string }; Body: { list: ItemListKey; itemId: number; on?
   try {
     const conn = connections.get(req.params.id);
     if (conn) {
+      const today = getTaiwanDateKey();
+      const combinedToday = updated.lastCombinedDate === today || connections.dailyChecklist?.get(req.params.id)?.items?.["combine_item"]?.done === true;
+      const effectiveLastDate = combinedToday ? today : (updated.lastCombinedDate ?? "");
       await conn.dispatch("set_item_lists", {
         autoDropJson: JSON.stringify(updated.discard ?? []),
         autoOpenJson: JSON.stringify(updated.autoOpen ?? []),
@@ -206,8 +209,9 @@ app.put<{ Params: { id: string }; Body: { list: ItemListKey; itemId: number; on?
         autoContributeJson: JSON.stringify(updated.contribute ?? []),
         autoCombineJson: JSON.stringify(updated.combine ?? []),
         sellJson: JSON.stringify(updated.sell ?? []),
-        togglesJson: JSON.stringify(updated.toggles ?? {}),
+        togglesJson: JSON.stringify({ ...updated.toggles, lastCombinedDate: effectiveLastDate }),
         autoSweepEnabled: updated.autoSweepEnabled ? "1" : "0",
+        lastCombinedDate: effectiveLastDate,
       }).catch(() => {});
     }
   } catch {}
@@ -223,6 +227,9 @@ app.post<{ Params: { id: string }; Body: { list: ItemListKey; itemIds: number[] 
   try {
     const conn = connections.get(req.params.id);
     if (conn) {
+      const today = getTaiwanDateKey();
+      const combinedToday = updated.lastCombinedDate === today || connections.dailyChecklist?.get(req.params.id)?.items?.["combine_item"]?.done === true;
+      const effectiveLastDate = combinedToday ? today : (updated.lastCombinedDate ?? "");
       await conn.dispatch("set_item_lists", {
         autoDropJson: JSON.stringify(updated.discard ?? []),
         autoOpenJson: JSON.stringify(updated.autoOpen ?? []),
@@ -230,8 +237,9 @@ app.post<{ Params: { id: string }; Body: { list: ItemListKey; itemIds: number[] 
         autoContributeJson: JSON.stringify(updated.contribute ?? []),
         autoCombineJson: JSON.stringify(updated.combine ?? []),
         sellJson: JSON.stringify(updated.sell ?? []),
-        togglesJson: JSON.stringify(updated.toggles ?? {}),
+        togglesJson: JSON.stringify({ ...updated.toggles, lastCombinedDate: effectiveLastDate }),
         autoSweepEnabled: updated.autoSweepEnabled ? "1" : "0",
+        lastCombinedDate: effectiveLastDate,
       }).catch(() => {});
     }
   } catch {}
@@ -246,6 +254,9 @@ app.put<{ Params: { id: string }; Body: { key: ItemListKey; enabled: boolean } }
   try {
     const conn = connections.get(req.params.id);
     if (conn) {
+      const today = getTaiwanDateKey();
+      const combinedToday = updated.lastCombinedDate === today || connections.dailyChecklist?.get(req.params.id)?.items?.["combine_item"]?.done === true;
+      const effectiveLastDate = combinedToday ? today : (updated.lastCombinedDate ?? "");
       await conn.dispatch("set_item_lists", {
         autoDropJson: JSON.stringify(updated.discard ?? []),
         autoOpenJson: JSON.stringify(updated.autoOpen ?? []),
@@ -253,8 +264,9 @@ app.put<{ Params: { id: string }; Body: { key: ItemListKey; enabled: boolean } }
         autoContributeJson: JSON.stringify(updated.contribute ?? []),
         autoCombineJson: JSON.stringify(updated.combine ?? []),
         sellJson: JSON.stringify(updated.sell ?? []),
-        togglesJson: JSON.stringify(updated.toggles ?? {}),
+        togglesJson: JSON.stringify({ ...updated.toggles, lastCombinedDate: effectiveLastDate }),
         autoSweepEnabled: updated.autoSweepEnabled ? "1" : "0",
+        lastCombinedDate: effectiveLastDate,
       }).catch(() => {});
     }
   } catch {}
@@ -268,6 +280,9 @@ app.put<{ Params: { id: string }; Body: { enabled: boolean } }>("/api/accounts/:
   try {
     const conn = connections.get(req.params.id);
     if (conn) {
+      const today = getTaiwanDateKey();
+      const combinedToday = updated.lastCombinedDate === today || connections.dailyChecklist?.get(req.params.id)?.items?.["combine_item"]?.done === true;
+      const effectiveLastDate = combinedToday ? today : (updated.lastCombinedDate ?? "");
       await conn.dispatch("set_item_lists", {
         autoDropJson: JSON.stringify(updated.discard ?? []),
         autoOpenJson: JSON.stringify(updated.autoOpen ?? []),
@@ -275,8 +290,9 @@ app.put<{ Params: { id: string }; Body: { enabled: boolean } }>("/api/accounts/:
         autoContributeJson: JSON.stringify(updated.contribute ?? []),
         autoCombineJson: JSON.stringify(updated.combine ?? []),
         sellJson: JSON.stringify(updated.sell ?? []),
-        togglesJson: JSON.stringify(updated.toggles ?? {}),
+        togglesJson: JSON.stringify({ ...updated.toggles, lastCombinedDate: effectiveLastDate }),
         autoSweepEnabled: updated.autoSweepEnabled ? "1" : "0",
+        lastCombinedDate: effectiveLastDate,
       }).catch(() => {});
     }
   } catch {}
@@ -452,6 +468,10 @@ app.put<{ Params: { id: string }; Body: Partial<EscortConfig> }>("/api/accounts/
 });
 app.post<{ Params: { id: string } }>("/api/accounts/:id/escort/run", async (req, reply) => {
   const r = await connections.escort.triggerFor(req.params.id);
+  return r.ok ? r : reply.code(400).send({ error: r.message });
+});
+app.post<{ Params: { id: string } }>("/api/accounts/:id/escort/claim", async (req, reply) => {
+  const r = await connections.escort.claimFor(req.params.id);
   return r.ok ? r : reply.code(400).send({ error: r.message });
 });
 app.post<{ Params: { id: string } }>("/api/accounts/:id/open-inn", async (req, reply) => {

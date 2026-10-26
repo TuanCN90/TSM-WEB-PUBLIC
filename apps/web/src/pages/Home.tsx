@@ -136,15 +136,15 @@ export function Home({ session }: { session: Session }) {
     status: (loc.channel ?? 0) === 0 ? "busy" : "free",
   };
 
-  const isAutoMoving = !!ch.chaseConfig?.enabled;
-  const isAutoMoveOnCurrentMap = isAutoMoving && ch.chaseConfig?.mapId === loc.map;
+  const isAutoMoving = !!ch.autoMove?.enabled;
+  const isAutoMoveOnCurrentMap = isAutoMoving && ch.autoMove?.mapId === loc.map;
 
   const handleToggleAutoMove = async () => {
     if (!selected) return;
     if (isAutoMoveOnCurrentMap) {
       try {
         setBusy(true);
-        await api.saveChaseConfig(selected, { enabled: false });
+        await act("set_auto_move", { enabled: "0" });
         toast("info", "🛑 Đã tắt tự động di chuyển.");
       } catch (err) {
         toast("error", `Lỗi: ${err instanceof Error ? err.message : String(err)}`);
@@ -154,15 +154,12 @@ export function Home({ session }: { session: Session }) {
     } else {
       try {
         setBusy(true);
-        await api.saveChaseConfig(selected, {
-          enabled: true,
+        await act("set_auto_move", {
+          enabled: "1",
           mapId: loc.map,
           originX: loc.x,
           originY: loc.y,
-          maxRadius: ch.chaseConfig?.maxRadius || 150,
-          npcId: undefined,
-          npcName: undefined,
-          autoReturn: true,
+          maxRadius: 150,
         });
         toast("ok", `🚶 Đã BẬT tự động di chuyển tại Map ${loc.map} (${loc.x}, ${loc.y})!`);
       } catch (err) {
@@ -299,6 +296,53 @@ export function Home({ session }: { session: Session }) {
             </section>
 
             <section className="card loc compact">
+              {/* Thông báo Tự động di chuyển (tách biệt với truy kích) */}
+              {ch.autoMove?.enabled && (
+                <div
+                  style={{
+                    padding: "6px 10px",
+                    background: "rgba(56, 189, 248, 0.12)",
+                    border: "1px solid rgba(56, 189, 248, 0.35)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    color: "#38bdf8",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <span>🚶</span>
+                    <span>
+                      <strong>Đang Tự Động Di Chuyển:</strong> Tâm Map {ch.autoMove.mapId} ({ch.autoMove.originX}, {ch.autoMove.originY}) • Bán kính {ch.autoMove.maxRadius || 150}px (bước 30px)
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    style={{
+                      background: "rgba(239, 68, 68, 0.2)",
+                      border: "1px solid #ef4444",
+                      color: "#f87171",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                    }}
+                    onClick={() => {
+                      if (selected) {
+                        void act("set_auto_move", { enabled: "0" });
+                        toast("info", "🛑 Đã dừng tự động di chuyển");
+                      }
+                    }}
+                  >
+                    Dừng
+                  </button>
+                </div>
+              )}
+
+              {/* Thông báo Truy kích quái (nếu có bật từ trang Bãi Train) */}
               {ch.chaseConfig?.enabled && (
                 <div
                   style={{
@@ -317,7 +361,7 @@ export function Home({ session }: { session: Session }) {
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <span>🎯</span>
                     <span>
-                      <strong>Đang Tự Động Di Chuyển / Truy Kích:</strong> {ch.chaseConfig.npcName ? `${ch.chaseConfig.npcName} • ` : ""}Tâm Map {ch.chaseConfig.mapId} ({ch.chaseConfig.originX}, {ch.chaseConfig.originY}) • Bán kính {ch.chaseConfig.maxRadius}px
+                      <strong>Đang Truy Kích Quái:</strong> {ch.chaseConfig.npcName ? `${ch.chaseConfig.npcName} • ` : ""}Tâm Map {ch.chaseConfig.mapId} ({ch.chaseConfig.originX}, {ch.chaseConfig.originY}) • Bán kính {ch.chaseConfig.maxRadius}px
                     </span>
                   </span>
                   <button
@@ -335,7 +379,7 @@ export function Home({ session }: { session: Session }) {
                     onClick={() => {
                       if (selected) {
                         void api.saveChaseConfig(selected, { enabled: false });
-                        toast("info", "🛑 Đã dừng tự động di chuyển");
+                        toast("info", "🛑 Đã tắt chế độ truy kích quái");
                       }
                     }}
                   >
@@ -343,23 +387,13 @@ export function Home({ session }: { session: Session }) {
                   </button>
                 </div>
               )}
-              <div className="row">
-                <h2>Vị trí & Bản đồ</h2>
-                {mapName && <b className="mapname" title={`Map ${loc.map}`}>{mapName}</b>}
+              <div className="row" style={{ alignItems: "center" }}>
+                <h2 title={`Map ${loc.map}`}>{mapName || (loc.map ? `Map ${loc.map}` : "Vị trí")}</h2>
                 <span className="sp" />
                 <div className="loc-now">
                   <div><span className="muted small">Map</span><b>{loc.map || "—"}</b></div>
                   <div><span className="muted small">X</span><b>{loc.x}</b></div>
                   <div><span className="muted small">Y</span><b>{loc.y}</b></div>
-                  <div>
-                    <span className="muted small">Kênh</span>
-                    <b style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <span title={CHANNEL_STATUS_META[currentChannelInfo.status].label}>
-                        {CHANNEL_STATUS_META[currentChannelInfo.status].dot}
-                      </span>
-                      <span>{currentChannelInfo.name}</span>
-                    </b>
-                  </div>
                 </div>
               </div>
               <div className="row wrap" style={{ alignItems: "center", gap: 8 }}>
@@ -421,9 +455,9 @@ export function Home({ session }: { session: Session }) {
                   title={
                     isAutoMoving
                       ? (isAutoMoveOnCurrentMap
-                          ? `Đang BẬT tự động di chuyển tại Map ${ch.chaseConfig?.mapId} (${ch.chaseConfig?.originX}, ${ch.chaseConfig?.originY}) • Bán kính ${ch.chaseConfig?.maxRadius || 150}px. Bấm để TẮT.`
-                          : `Đang bật ở Map ${ch.chaseConfig?.mapId}. Bấm để chuyển tự động di chuyển sang Map hiện tại ${loc.map} (${loc.x}, ${loc.y}).`)
-                      : `Bật tự động di chuyển & tuần tra tại Map ${loc.map} (${loc.x}, ${loc.y})`
+                          ? `Đang BẬT tự động di chuyển tại Map ${ch.autoMove?.mapId} (${ch.autoMove?.originX}, ${ch.autoMove?.originY}) • Bán kính ${ch.autoMove?.maxRadius || 150}px. Bấm để TẮT.`
+                          : `Đang bật ở Map ${ch.autoMove?.mapId}. Bấm để chuyển tự động di chuyển sang Map hiện tại ${loc.map} (${loc.x}, ${loc.y}).`)
+                      : `Bật tự động di chuyển quanh Map ${loc.map} (${loc.x}, ${loc.y}) [bước 30px, tối đa 150px]`
                   }
                 >
                   <span style={{ fontSize: 13 }}>{isAutoMoving ? "🛑" : "🚶"}</span>
@@ -441,44 +475,40 @@ export function Home({ session }: { session: Session }) {
                     />
                   )}
                 </button>
-                {/* Kênh hiện tại + công cụ đổi kênh */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", width: "100%", margin: "4px 0" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span className="muted small">Kênh:</span>
-                    <span
-                      style={{
-                        padding: "3px 8px",
-                        borderRadius: 6,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: CHANNEL_STATUS_META[currentChannelInfo.status].color,
-                        background: CHANNEL_STATUS_META[currentChannelInfo.status].bg,
-                        border: `1px solid ${CHANNEL_STATUS_META[currentChannelInfo.status].border}`,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                      }}
-                    >
-                      <span>{CHANNEL_STATUS_META[currentChannelInfo.status].dot}</span>
-                      <span>{currentChannelInfo.name}</span>
-                      <span style={{ fontSize: 11, opacity: 0.85 }}>({CHANNEL_STATUS_META[currentChannelInfo.status].label})</span>
-                    </span>
-                    <button
-                      type="button"
-                      className="small"
-                      onClick={() => {
-                        const next = !channelSelectorOpen;
-                        setChannelSelectorOpen(next);
-                        if (next && can) {
-                          act("refresh_channels");
-                        }
-                      }}
-                      style={{ padding: "3px 8px", fontSize: 12, borderRadius: 6 }}
-                    >
-                      {channelSelectorOpen ? "Đóng danh sách kênh ✕" : "Đổi kênh 📡"}
-                    </button>
-                  </div>
-                </div>
+
+                {/* 1 Button Kênh duy nhất - bấm vào để mở danh sách đổi kênh */}
+                <button
+                  type="button"
+                  id="btn-channel-toggle"
+                  onClick={() => {
+                    const next = !channelSelectorOpen;
+                    setChannelSelectorOpen(next);
+                    if (next && can) {
+                      act("refresh_channels");
+                    }
+                  }}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: CHANNEL_STATUS_META[currentChannelInfo.status].color,
+                    background: CHANNEL_STATUS_META[currentChannelInfo.status].bg,
+                    border: `1px solid ${CHANNEL_STATUS_META[currentChannelInfo.status].border}`,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                  title="Bấm để mở danh sách chọn đổi kênh"
+                >
+                  <span>{CHANNEL_STATUS_META[currentChannelInfo.status].dot}</span>
+                  <span>{currentChannelInfo.name} ({CHANNEL_STATUS_META[currentChannelInfo.status].label})</span>
+                  <span style={{ fontSize: 11, opacity: 0.8, marginLeft: 2 }}>
+                    {channelSelectorOpen ? "✕ Đóng" : "📡 Đổi kênh ▾"}
+                  </span>
+                </button>
 
                 {channelSelectorOpen && (
                   <div
