@@ -67,6 +67,7 @@ interface Runtime {
   plan?: PartyPlanState;
   planJson?: string;
   gathering: boolean;
+  lastConnectedAt?: number;
 }
 
 export class PartyService {
@@ -161,6 +162,11 @@ export class PartyService {
         if (!rt) {
           rt = { firstSeen: now, lastSend: new Map(), sendCount: new Map(), lastProbe: new Map(), lastAdvisor: new Map(), lastConfigHash: "", lastLog: new Map(), gathering: false };
           this.rt.set(key, rt);
+        }
+        const connTime = o.conn.info?.()?.connectedAt ?? 0;
+        if (connTime > 0 && rt.lastConnectedAt !== connTime) {
+          rt.lastConnectedAt = connTime;
+          rt.lastConfigHash = "";
         }
         try {
           const ch = o.conn.character();

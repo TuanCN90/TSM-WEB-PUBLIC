@@ -546,6 +546,16 @@ describe("Hệ thống Trận đấu & Kỹ năng (Treo Rung 30 Dau Vat.pcap)", 
     // Char đánh skill 10000 (10 27) lên F1 (0,2)
     expect(sent[0]).toBe(body(0x32, 0x01, "000302000210270000"));
     expect(games.some((g) => g.includes("bỏ chạy"))).toBe(false);
+
+    // 4. Thành viên bật escapeIfNotFullParty nhưng chưa cấu hình leaderName và chưa vào đội -> Vẫn chạy cả Char và Pet
+    s.encodeAction("set_party_config", ["", "[]", "member", "", "[]", "1"]);
+    sent.length = 0;
+    games.length = 0;
+    s.onData(frame(0x34, 0x01, "00"));
+    expect(sent.length).toBe(2);
+    expect(sent[0]).toBe(body(0x32, 0x01, "000302030251460000"));
+    expect(sent[1]).toBe(body(0x32, 0x01, "000202020251460000"));
+    expect(games.some((g) => g.includes("Ưu tiên Bậc 2") && g.includes("Chưa gia nhập đội ngũ"))).toBe(true);
   });
 
   it("Theo turn: Char xuất chiến pet (13/01) ở Turn 1, dùng item (19001) hồi HP cho Pet ở Turn 2", () => {

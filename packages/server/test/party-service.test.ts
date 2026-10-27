@@ -14,9 +14,13 @@ class FakeConn {
   results: Record<string, { ok: boolean; message?: string }> = {};
   /** Nếu đặt: hàm quyết định kết quả (thấy params.force…). Ưu tiên hơn `results`. */
   respond?: (action: string, params?: Record<string, string>) => { ok: boolean; message?: string } | undefined;
+  connectedAt = 1000;
   constructor(public name: string, public map: number, public party: PartyState = { members: [], inviteStatus: "" }, public inBattle = false) {}
   character() {
     return { player: { name: this.name }, location: { map: this.map }, party: this.party, inBattle: this.inBattle } as unknown as CharacterState;
+  }
+  info() {
+    return { connectedAt: this.connectedAt } as unknown as import("@tsbot/protocol").ConnectionInfo;
   }
   async dispatch(action: string, params?: Record<string, string>) {
     this.calls.push({ action, params });
@@ -298,5 +302,29 @@ describe("PartyService", () => {
     conns.set("chu", new FakeConn("Chu", 12003));
     store.set("chu", { enabled: false, role: "leader", members: [{ name: "Lien", advisor: false }] });
     expect(await svc.gather("chu", "x", new AbortController().signal)).toEqual({ ok: true });
+  });
+
+  it("reconnect: PartyService tự động phát hiện connectedAt thay đổi và đẩy lại set_party_config (escapeIfNotFullParty)", async () => {
+    const { store, conns, svc, tick } = await setup();
+    const conn = new FakeConn("Teemo", 12003);
+    conns.set("teemo", conn);
+    store.set("teemo", { enabled: true, role: "member", leaderName: "ChuTeam", escapeIfNotFullParty: true });
+
+    // Lần 1: đẩy set_party_config
+    await tick();
+    const calls1 = conn.calls.filter((c) => c.action === "set_party_config");
+    expect(calls1).toHaveLength(1);
+    expect(calls1[0]!.params!.escapeIfNotFullParty).toBe("1");
+
+    // Lần 2 (chưa reconnect): hash không đổi => không đẩy lại
+    await tick();
+    expect(conn.calls.filter((c) => c.action === "set_party_config")).toHaveLength(1);
+
+    // Mô phỏng reconnect: connectedAt thay đổi timestamp mới
+    conn.connectedAt = 5000;
+    await tick();
+    const calls3 = conn.calls.filter((c) => c.action === "set_party_config");
+    expect(calls3).toHaveLength(2);
+    expect(calls3[1]!.params!.escapeIfNotFullParty).toBe("1");
   });
 });

@@ -5302,6 +5302,8 @@ class TsOnlineSession implements CodecSession {
           if (!isJoinedLeaderTeam) {
             incompleteReason = `Chưa gia nhập vào đội ngũ của [${targetLeader}]`;
           }
+        } else if (!snap.joined) {
+          incompleteReason = `Chưa gia nhập đội ngũ`;
         }
       }
 

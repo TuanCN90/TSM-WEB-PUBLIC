@@ -192,8 +192,11 @@ export class ConnectionManager {
         onCharacter: (ch) => this.onCharacter(accountId, this.withPlan(accountId, ch)),
         onOnline: (reconnected) => {
           if (reconnected) {
-            c?.log("info", "🔄 [Tự động khôi phục] Đồng bộ lại cấu hình trận đấu và vật phẩm sau khi kết nối lại...", "game");
-            void this.applyAccountConfigs(accountId, c!).catch(() => {});
+            c?.log("info", "🔄 [Tự động khôi phục] Đồng bộ lại cấu hình trận đấu, vật phẩm và tổ đội sau khi kết nối lại...", "game");
+            void this.applyAccountConfigs(accountId, c!).then(() => {
+              this.party.refresh(accountId);
+              this.dungeonTeam.refresh(accountId);
+            }).catch(() => {});
           }
         },
       });
@@ -260,6 +263,18 @@ export class ConnectionManager {
         npcId: String(chaseCfg.npcId ?? 0),
         npcName: chaseCfg.npcName ?? "",
         autoReturn: chaseCfg.autoReturn ? "1" : "0",
+      }).catch(() => {});
+    }
+    const pCfg = this.partyConfigs?.get(accountId);
+    if (pCfg) {
+      const names = pCfg.members.map((m) => m.name).filter(Boolean);
+      await c.dispatch("set_party_config", {
+        inviteFrom: pCfg.enabled && pCfg.role === "member" ? pCfg.leaderName : "",
+        requestFromJson: JSON.stringify(pCfg.enabled && pCfg.role === "leader" ? names : []),
+        role: pCfg.role,
+        leaderName: pCfg.role === "member" ? pCfg.leaderName : "",
+        membersJson: JSON.stringify(pCfg.role === "leader" ? names : []),
+        escapeIfNotFullParty: pCfg.escapeIfNotFullParty ? "1" : "0",
       }).catch(() => {});
     }
   }

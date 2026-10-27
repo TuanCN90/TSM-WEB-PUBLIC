@@ -211,7 +211,7 @@ export class GameConnection {
         if (this.state === "online") {
           this.o.onOnline?.(reconnected);
         }
-      }, 500);
+      }, 50);
     }
   }
 
