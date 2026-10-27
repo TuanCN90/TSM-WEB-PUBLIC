@@ -4932,7 +4932,14 @@ class TsOnlineSession implements CodecSession {
       };
       const oi = this.battleUnits.findIndex((u) => u.row === row && u.col === col);
       if (oi >= 0) this.battleUnits[oi] = other; else this.battleUnits.push(other);
-      this.io.patchState({ inBattle: true, battleUnits: [...this.battleUnits] });
+      if (other.owner === this.selfHex && (other.hp.cur > 0 || other.hp.max > 0)) {
+        this.player = {
+          ...this.player,
+          hp: { cur: other.hp.cur, max: other.hp.max || this.player.hp.max },
+          sp: { cur: other.sp.cur, max: other.sp.max || this.player.sp.max },
+        };
+      }
+      this.io.patchState({ inBattle: true, battleUnits: [...this.battleUnits], player: this.player });
       return;
     }
     const petOwner = !isEnemy && kind === 0x04 && f.length >= 29 ? f.toString("hex", 21, 29) : undefined;
@@ -5263,8 +5270,8 @@ class TsOnlineSession implements CodecSession {
       || (this.partyTargetConfig.role === "member" && inTeamBattle);
 
     // Tính cột dự kiến của thành viên dựa trên thứ tự gia nhập đội ngũ trong snap.members:
-    // TS Online gán slot 1 (chủ PT) = col 2; slot 2 = col 0; slot 3 = col 1; slot 4 = col 3; slot 5 = col 4.
-    const SLOT_TO_COL = [2, 0, 1, 3, 4];
+    // Chuẩn TS Online toả ra từ giữa: Slot 1 (chủ PT) = col 2; Slot 2 = col 1; Slot 3 = col 3; Slot 4 = col 0; Slot 5 = col 4.
+    const SLOT_TO_COL = [2, 1, 3, 0, 4];
     let memberExpectedCol: number | undefined;
     if (isMemberInParty && snap.joined && snap.members.length > 0) {
       const myIdx = snap.members.findIndex((m) =>
@@ -5301,14 +5308,15 @@ class TsOnlineSession implements CodecSession {
     // Nếu không có võ tướng tại ô (2, pCol) hoặc võ tướng đã gục ngã (hp <= 0) ⇒ TUYỆT ĐỐI KHÔNG gửi bất kỳ lệnh nào cho võ tướng
     // (trước đây gửi nhầm cho (2, 2) của chủ PT ⇒ server kick mã 42 ngay sau lượt đầu).
     // Với chủ PT hoặc chơi đơn: cho phép điều khiển võ tướng tại ô (2, 2) nếu có võ tướng xuất chiến (activePet).
-    let petUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === true && u.row === 2 && u.col === pCol && !(u.hp.max > 0 && u.hp.cur === 0));
+    let petUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === true && u.row === 2 && u.col === pCol && !(u.hp.max > 0 && u.hp.cur === 0))
+      ?? (self ? this.battleUnits.find((u) => !u.isEnemy && u.isPet === true && u.owner === self && !(u.hp.max > 0 && u.hp.cur === 0)) : undefined);
     if (!petUnit && !isMemberInParty && this.activePet()) {
       petUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === true && u.row === 2 && u.col === 2)
         ?? this.battleUnits.find((u) => !u.isEnemy && u.isPet === true);
     }
     const hasPet = petUnit ? !(petUnit.hp.max > 0 && petUnit.hp.cur === 0) : (!isMemberInParty && !!this.activePet());
     const petRow = 2;
-    const petCol = pCol;
+    const petCol = petUnit?.col ?? pCol;
 
     const isCharAlive = charUnit ? !(charUnit.hp.max > 0 && charUnit.hp.cur === 0) : !(this.player.hp.max > 0 && this.player.hp.cur === 0);
 
@@ -5764,11 +5772,11 @@ class TsOnlineSession implements CodecSession {
         targetUnit.hp.cur = Math.max(0, targetUnit.hp.cur - damage);
         curHp = targetUnit.hp.cur;
         const mine = !targetUnit.isEnemy && (!targetUnit.owner || /^0+$/.test(targetUnit.owner) || targetUnit.owner === this.selfHex); // đồng đội/võ tướng người khác KHÔNG đổi HP của mình
-        if (mine && (targetUnit.isPet || (targetRow === 2 && targetCol === 2))) {
+        if (mine && (targetUnit.isPet || targetRow === 2)) {
           this.pet.hp.cur = curHp;
           const act = this.activePet();
           if (act) act.hp = curHp;
-        } else if (mine && (!targetUnit.isPet || (targetRow === 3 && targetCol === 2))) {
+        } else if (mine && (!targetUnit.isPet || targetRow === 3)) {
           this.player.hp.cur = curHp;
         }
         stateChanged = true;

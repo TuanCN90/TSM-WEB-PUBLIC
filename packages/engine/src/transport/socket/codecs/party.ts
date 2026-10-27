@@ -52,7 +52,7 @@ const PENDING_TTL_MS = 90_000;
 const MAX_PLAYERS = 600;
 
 /** So tên không phân biệt hoa/thường, bỏ khoảng trắng đầu cuối. */
-export const normName = (s: string) => s.normalize("NFKC").trim().toLowerCase();
+export const normName = (s: string) => s.replace(/§[0-9a-fk-or]/gi, "").normalize("NFKC").trim().toLowerCase();
 
 export interface SeenPlayer {
   uid: string; // hex 16 ký tự

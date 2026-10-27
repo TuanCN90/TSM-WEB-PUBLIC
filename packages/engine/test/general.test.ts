@@ -1736,6 +1736,47 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
       expect(attackAction![5]).toBe(1); // targetRow = 1 (hàng trước đối diện)
       expect([0, 2]).toContain(attackAction![6]); // targetCol: quái ở hàng trước
     });
+
+    it("ánh xạ thứ tự slot vào đội sang cột lưới chiến chuẩn TS Online [2, 1, 3, 0, 4]", () => {
+      const { s, sent } = setup();
+      (s as any).uid = Buffer.from("3333333333333333", "hex");
+      (s as any).player = { name: "ZhuQue", hp: { cur: 1000, max: 1000 }, sp: { cur: 100, max: 100 } };
+      (s as any).partyTargetConfig = { role: "member", leaderName: "JunDaGe", members: [], escapeIfNotFullParty: false };
+
+      // Đội 5 người: slot 1 Leader, slot 2 QingLong, slot 3 ZhuQue (mình), slot 4 XuanWu, slot 5 BaiHu
+      (s as any).party = {
+        snapshot: () => ({
+          joined: true,
+          leaderName: "JunDaGe",
+          members: [
+            { slot: 1, name: "JunDaGe", uid: "1111111111111111", isLeader: true, isSelf: false },
+            { slot: 2, name: "QingLong", uid: "2222222222222222", isLeader: false, isSelf: false },
+            { slot: 3, name: "§fZhuQue", uid: "3333333333333333", isLeader: false, isSelf: true },
+            { slot: 4, name: "XuanWu", uid: "4444444444444444", isLeader: false, isSelf: false },
+            { slot: 5, name: "BaiHu", uid: "5555555555555555", isLeader: false, isSelf: false },
+          ],
+        }),
+      };
+
+      (s as any).inBattle = true;
+      (s as any).battleUnits = [
+        { row: 1, col: 2, name: "Quái", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+      ];
+
+      sent.length = 0;
+      s.onData(frame(0x34, 0x01, "00"));
+
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      const attackAction = dec.find((b) => b[0] === 0x32 && b[1] === 0x01);
+      expect(attackAction).toBeDefined();
+      expect(attackAction![3]).toBe(3); // row = 3
+      expect(attackAction![4]).toBe(3); // col = 3 (Slot 3 ánh xạ đúng col 3, KHÔNG PHẢI 1)
+    });
   });
 });
 
