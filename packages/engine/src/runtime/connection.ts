@@ -17,6 +17,8 @@ export interface ConnectionOptions {
   lastClosedAt?: number;
   /** Gọi mỗi khi socket bị đóng, để lưu lại thời điểm. */
   onClosed?: (ts: number) => void;
+  /** Gọi khi kết nối online (hoặc reconnect thành công). */
+  onOnline?: (reconnected: boolean) => void;
 }
 
 export interface LoginParams {
@@ -204,6 +206,13 @@ export class GameConnection {
     this.setState("online");
     this.syncTimer = setInterval(() => { if (this.state === "online") this.o.onCharacter(t.getState()); }, SYNC_INTERVAL_MS);
     this.scheduleHeartbeat();
+    if (this.o.onOnline) {
+      setTimeout(() => {
+        if (this.state === "online") {
+          this.o.onOnline?.(reconnected);
+        }
+      }, 500);
+    }
   }
 
   private scheduleHeartbeat() {

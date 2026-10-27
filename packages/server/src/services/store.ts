@@ -274,6 +274,8 @@ export class ItemListStore {
       player: { autoHp: false, hpPct: 50, autoSp: false, spPct: 50 },
       pet: { autoHp: false, hpPct: 50, autoSp: false, spPct: 50 },
       slots: {},
+      safeSpotOnFaint: false,
+      autoReviveAlly: false,
     },
   });
 
@@ -325,6 +327,8 @@ export class ItemListStore {
           spPct: Math.max(1, Math.min(99, Number(data.autoHeal?.pet?.spPct ?? base.autoHeal?.pet.spPct ?? 50))),
         },
         slots: data.autoHeal?.slots ?? base.autoHeal?.slots ?? {},
+        safeSpotOnFaint: data.autoHeal?.safeSpotOnFaint !== undefined ? Boolean(data.autoHeal.safeSpotOnFaint) : (base.autoHeal?.safeSpotOnFaint ?? false),
+        autoReviveAlly: data.autoHeal?.autoReviveAlly !== undefined ? Boolean(data.autoHeal.autoReviveAlly) : (base.autoHeal?.autoReviveAlly ?? false),
       },
     };
   }
@@ -417,6 +421,8 @@ export class ItemListStore {
         spPct: Math.max(1, Math.min(99, Number(cfg.pet?.spPct ?? prev.pet.spPct) || 50)),
       },
       slots: cfg.slots !== undefined ? cfg.slots : prev.slots,
+      safeSpotOnFaint: cfg.safeSpotOnFaint !== undefined ? Boolean(cfg.safeSpotOnFaint) : (prev.safeSpotOnFaint ?? false),
+      autoReviveAlly: cfg.autoReviveAlly !== undefined ? Boolean(cfg.autoReviveAlly) : (prev.autoReviveAlly ?? false),
     };
     this.f.write({ ...all, [cKey]: cur });
     return cur;

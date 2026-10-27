@@ -605,6 +605,10 @@ class TsOnlineSession implements CodecSession {
     if (foundSkills.length > 0) {
       this.playerSkills = foundSkills;
       this.io.patchState({ playerSkills: foundSkills });
+      if (this.autoHeal.autoReviveAlly && !foundSkills.some((s) => s.id === 11013)) {
+        this.autoHeal.autoReviveAlly = false;
+        this.io.game("⚠️ Ní chưa lĩnh hội thần thông hồi sinh rồi");
+      }
     }
     this.lastRawExp.player = f.readUInt32LE(29);
     this.player = this.applyExp(this.player, f.readUInt32LE(29), PLAYER_CURVES, "nhân vật");
@@ -912,6 +916,13 @@ class TsOnlineSession implements CodecSession {
     this.locSeq++;
     this.io.patchState({ location: this.location });
 
+    if (map === 21001 && this.pendingFaintTeleport) {
+      this.pendingFaintTeleport = false;
+      this.allyFaintedInBattle = false;
+      this.faintedAllyName = "";
+      this.io.game("🛡️ [Bảo Vệ] Đã cập bến Cổng thành Tương Dương an toàn!");
+    }
+
     if (channelChanged && !mapChanged) {
       this.io.game(`📡 [Kênh] Đã chuyển sang Kênh ${channel + 1} thành công.`);
     }
@@ -1121,7 +1132,12 @@ class TsOnlineSession implements CodecSession {
     player: { autoHp: false, hpPct: 50, autoSp: false, spPct: 50 },
     pet: { autoHp: false, hpPct: 50, autoSp: false, spPct: 50 },
     slots: {},
+    safeSpotOnFaint: false,
+    autoReviveAlly: false,
   };
+  private allyFaintedInBattle = false;
+  private faintedAllyName = "";
+  private pendingFaintTeleport = false;
   private lastAutoHealAt = 0;
   private autoHealRunning = false;
   private pendingCheckinDay?: number;
@@ -3507,11 +3523,14 @@ class TsOnlineSession implements CodecSession {
         return Buffer.alloc(0);
       }
       case "set_battle_config": {
-        const pId = Number(args[0]) || 10000;
-        const petId = Number(args[1]) || 10000;
-        const auto = args[2] === "1" || args[2] === "true" || args[2] === undefined;
-        const pTarget = args[3] || "F1";
-        const petTarget = args[4] || "F1";
+        const curCfg = this.battleConfig;
+        const pId = args[0] ? (Number(args[0]) || 10000) : (curCfg?.playerAction?.skillId ?? 10000);
+        const petId = args[1] ? (Number(args[1]) || 10000) : (curCfg?.petAction?.skillId ?? 10000);
+        const auto = args[2] !== undefined && args[2] !== ""
+          ? (args[2] === "1" || args[2] === "true")
+          : (curCfg?.autoFight ?? true);
+        const pTarget = args[3] ? args[3] : (curCfg?.playerAction?.target || "F1");
+        const petTarget = args[4] ? args[4] : (curCfg?.petAction?.target || "F1");
         let turns: BattleTurnConfig[] | undefined = undefined;
         if (args[5]) {
           try {
@@ -3547,15 +3566,17 @@ class TsOnlineSession implements CodecSession {
         }
         const mode = (args[6] === "turns" || args[6] === "default")
           ? (args[6] as "default" | "turns")
-          : (turns && turns.length > 0 ? "turns" : (this.battleConfig.strategyMode ?? "default"));
-        const autoEscape = String(args[7]) === "1" || String(args[7]) === "true";
+          : (turns && turns.length > 0 ? "turns" : (curCfg?.strategyMode ?? "default"));
+        const autoEscape = args[7] !== undefined && args[7] !== ""
+          ? (String(args[7]) === "1" || String(args[7]) === "true")
+          : (curCfg?.autoEscape ?? false);
         this.battleConfig = {
           playerAction: { type: this.skillType(pId), skillId: pId, target: pTarget },
           petAction: { type: this.skillType(petId), skillId: petId, target: petTarget },
           autoFight: auto,
           autoEscape,
           strategyMode: mode,
-          turns: turns ?? this.battleConfig.turns ?? [],
+          turns: turns ?? curCfg?.turns ?? [],
           currentTurn: this.battleTurnIndex,
         };
         this.io.patchState({ battleConfig: this.battleConfig });
@@ -3890,6 +3911,13 @@ class TsOnlineSession implements CodecSession {
               player: { ...this.autoHeal.player, ...(parsed.player ?? {}) },
               pet: { ...this.autoHeal.pet, ...(parsed.pet ?? {}) },
             };
+            if (this.autoHeal.autoReviveAlly && this.playerSkills.length > 0) {
+              const hasRevive = this.playerSkills.some((s) => s.id === 11013);
+              if (!hasRevive) {
+                this.autoHeal.autoReviveAlly = false;
+                this.io.game("⚠️ Ní chưa lĩnh hội thần thông hồi sinh rồi");
+              }
+            }
             this.io.game("⚙️ [Cấu hình Chung] Đã cập nhật thiết lập tự động sử dụng HP/SP.");
             this.triggerAutoHeal();
           }
@@ -4782,6 +4810,8 @@ class TsOnlineSession implements CodecSession {
 
   private battleStart() {
     this.inBattle = true;
+    this.allyFaintedInBattle = false;
+    this.faintedAllyName = "";
     this.cancelPendingAcks();
     if (this.chaseCheckTimer) {
       clearTimeout(this.chaseCheckTimer);
@@ -4978,7 +5008,7 @@ class TsOnlineSession implements CodecSession {
           name: isEnemy ? `Quái (${col})` : (isPet ? (this.pet.name || "Võ tướng") : (this.player.name || "Nhân vật")),
           level: isEnemy ? 30 : (isPet ? (this.pet.level || 96) : (this.player.level || 121)),
           hp: { cur: isPet ? (this.pet.hp.cur || 0) : (!isEnemy ? (this.player.hp.cur || 0) : 0), max: isPet ? (this.pet.hp.max || 0) : (!isEnemy ? (this.player.hp.max || 0) : 0) },
-          sp: { cur: 0, max: isPet ? (this.pet.sp.max || 0) : (this.player.sp.max || 0) },
+          sp: { cur: isPet ? (this.pet.sp.cur || 0) : (!isEnemy ? (this.player.sp.cur || 0) : 0), max: isPet ? (this.pet.sp.max || 0) : (this.player.sp.max || 0) },
           isEnemy,
           isPet,
         };
@@ -5000,6 +5030,12 @@ class TsOnlineSession implements CodecSession {
       }
       if (statType === 0x19) {
         u.hp.cur = val;
+        if (!u.isEnemy && val === 0) {
+          this.allyFaintedInBattle = true;
+          if (!this.faintedAllyName) {
+            this.faintedAllyName = u.name || (u.isPet ? "Võ tướng" : "Thành viên");
+          }
+        }
         if (mine) {
           const isPetUnit = u.isPet === true || (u.isPet !== false && row === 2);
           if (isPetUnit) {
@@ -5053,7 +5089,7 @@ class TsOnlineSession implements CodecSession {
   }
 
   private isSupportSkill(skillId: number, targetSetting?: string): boolean {
-    if (skillId === 17001) return true; // Phòng ngự
+    if (skillId === 17001 || skillId === 11013) return true; // Phòng ngự hoặc Hồi sinh
     const slotNum = parseInt(targetSetting || "", 10);
     if (!isNaN(slotNum) && slotNum >= 11 && slotNum <= 20) return true; // Người dùng chủ động chọn slot phe ta
     const sDef = (skillDataRaw as Record<string, any>)[String(skillId)];
@@ -5214,9 +5250,22 @@ class TsOnlineSession implements CodecSession {
 
     // ------------------------------------------------------------------------
     // THỨ TỰ ƯU TIÊN CHIẾN THUẬT (PRIORITY RULES):
+    // Bậc 0 (Ưu tiên khẩn cấp): Đang trong trạng thái rút lui về Tương Dương.
     // Bậc 1 (Priority 1): Cấu hình Tự Động Bỏ Chạy (autoEscape) khi vào trận.
     // Bậc 2 (Priority 2): Tự động bỏ chạy khi chưa đủ đội ngũ (escapeIfNotFullParty).
     // ------------------------------------------------------------------------
+    if (this.pendingFaintTeleport) {
+      this.io.game(`🏃 [${this.player.name || "Nhân vật"}] đang trong trạng thái rút lui về Tương Dương, tự động bỏ chạy khỏi trận!`);
+      if (isCharAlive) {
+        const pEscapeBuf = this.encodeBattleActionFrame(pRow, pCol, pRow, pCol, 18001);
+        this.io.send(pEscapeBuf);
+      }
+      if (hasPet) {
+        const petEscapeBuf = this.encodeBattleActionFrame(petRow, petCol, petRow, petCol, 18001);
+        this.io.send(petEscapeBuf);
+      }
+      return;
+    }
     if (this.battleConfig.autoEscape) {
       this.io.game(`🏃 [${this.player.name || "Nhân vật"}] & [${petUnit?.name || this.pet?.name || "Võ tướng"}] tự động bỏ chạy khỏi trận (Ưu tiên Bậc 1)!`);
       if (isCharAlive) {
@@ -5272,50 +5321,80 @@ class TsOnlineSession implements CodecSession {
 
     // 1. Lệnh của Nhân vật (chỉ gửi khi nhân vật còn sống)
     const pAct = turnCfg?.playerAction ?? this.battleConfig.playerAction;
+    let didRevive = false;
+    let reviveTargetName = "";
+
     if (isCharAlive) {
-      if (pAct.type === "summon" && pAct.petModel) {
-        const petModel = Number(pAct.petModel);
-        const rec = this.roster.find((r) => r.model === petModel);
-        const petName = pAct.petName || (rec ? this.petUnit(rec).name : (npcNames as Record<string, string>)[String(petModel)] ?? `Model ${petModel}`);
-        this.io.game(`🐕 [${this.player.name || "Nhân vật"}] xuất chiến võ tướng [${petName}] (Hiệp ${effectiveTurn})!`);
-        // Gói tin xuất chiến võ tướng 13/01 `00 <model u16 LE>`
-        this.io.send(encodeFrame(cmdBody(0x13, 0x01, [0x00, petModel & 0xff, petModel >> 8])));
-      } else if (pAct.type === "item" || pAct.skillId === 19001) {
-        let slot = pAct.itemSlot;
-        if (!slot && pAct.itemId) {
-          for (const [s, item] of this.bag.entries()) {
-            if (item.id === Number(pAct.itemId)) {
-              slot = s;
-              break;
+      const hasReviveSkill = this.playerSkills.length > 0 ? this.playerSkills.some((s) => s.id === 11013) : true;
+      if (this.autoHeal.autoReviveAlly && this.playerSkills.length > 0 && !this.playerSkills.some((s) => s.id === 11013)) {
+        this.autoHeal.autoReviveAlly = false;
+        this.io.game("⚠️ Ní chưa lĩnh hội thần thông hồi sinh rồi");
+      }
+
+      const faintedAllies = (this.autoHeal.autoReviveAlly && hasReviveSkill)
+        ? this.battleUnits.filter((u) => !u.isEnemy && u.hp.max > 0 && u.hp.cur <= 0)
+        : [];
+
+      // Ưu tiên hồi sinh: Nhân vật đồng đội trước, sau đó tới Võ tướng
+      const targetAlly = faintedAllies.find((u) => !u.isPet || u.row === 3) ?? faintedAllies[0];
+      const curPSp = Math.max(charUnit?.sp.cur ?? 0, this.player.sp.cur);
+
+      if (targetAlly) {
+        if (curPSp < 40) {
+          this.io.game(`⚠️ [${this.player.name || "Nhân vật"}] không đủ SP để Hồi Sinh (${curPSp}/40), chuyển sang thiết lập thông thường.`);
+        } else {
+          didRevive = true;
+          reviveTargetName = targetAlly.name || `(${targetAlly.row}, ${targetAlly.col})`;
+          this.io.game(`💫 [${this.player.name || "Nhân vật"}] ưu tiên dùng [Hồi Sinh] lên đồng đội [${reviveTargetName}] (${targetAlly.row}, ${targetAlly.col})!`);
+          const pReviveBuf = this.encodeBattleActionFrame(pRow, pCol, targetAlly.row, targetAlly.col, 11013);
+          this.io.send(pReviveBuf);
+        }
+      }
+
+      if (!didRevive) {
+        if (pAct.type === "summon" && pAct.petModel) {
+          const petModel = Number(pAct.petModel);
+          const rec = this.roster.find((r) => r.model === petModel);
+          const petName = pAct.petName || (rec ? this.petUnit(rec).name : (npcNames as Record<string, string>)[String(petModel)] ?? `Model ${petModel}`);
+          this.io.game(`🐕 [${this.player.name || "Nhân vật"}] xuất chiến võ tướng [${petName}] (Hiệp ${effectiveTurn})!`);
+          // Gói tin xuất chiến võ tướng 13/01 `00 <model u16 LE>`
+          this.io.send(encodeFrame(cmdBody(0x13, 0x01, [0x00, petModel & 0xff, petModel >> 8])));
+        } else if (pAct.type === "item" || pAct.skillId === 19001) {
+          let slot = pAct.itemSlot;
+          if (!slot && pAct.itemId) {
+            for (const [s, item] of this.bag.entries()) {
+              if (item.id === Number(pAct.itemId)) {
+                slot = s;
+                break;
+              }
             }
           }
-        }
-        const itemSlot = slot ?? 1;
-        const targetPref = pAct.target || "F1";
-        const target = this.resolveTarget(targetPref, true);
-        const itemName = pAct.itemName || (pAct.itemId ? `Item #${pAct.itemId}` : `Ô túi #${itemSlot}`);
-        this.io.game(`🧪 [${this.player.name || "Nhân vật"}] dùng [${itemName}] lên [${target.label}] (Hiệp ${effectiveTurn})!`);
-        const pBuf = this.encodeBattleActionFrame(pRow, pCol, target.row, target.col, 19001, itemSlot);
-        this.io.send(pBuf);
-      } else {
-        let pSkillId = Number(pAct.skillId) || 10000;
-        const pSkillDef = (skillDataRaw as Record<string, any>)[String(pSkillId)];
-        const reqPSp = pSkillDef?.sp ?? 0;
-        const curPSp = charUnit?.sp.cur ?? this.player.sp.cur;
-        const maxPSp = charUnit?.sp.max || this.player.sp.max;
-        if (maxPSp > 0 && pSkillId !== 10000 && pSkillId !== 17001 && pSkillId !== 18001 && reqPSp > 0 && curPSp < reqPSp) {
-          this.io.game(`⚠️ [${this.player.name || "Nhân vật"}] không đủ SP (${curPSp}/${reqPSp}), chuyển sang [Đấu Vật]`);
-          pSkillId = 10000;
-        }
+          const itemSlot = slot ?? 1;
+          const targetPref = pAct.target || "F1";
+          const target = this.resolveTarget(targetPref, true);
+          const itemName = pAct.itemName || (pAct.itemId ? `Item #${pAct.itemId}` : `Ô túi #${itemSlot}`);
+          this.io.game(`🧪 [${this.player.name || "Nhân vật"}] dùng [${itemName}] lên [${target.label}] (Hiệp ${effectiveTurn})!`);
+          const pBuf = this.encodeBattleActionFrame(pRow, pCol, target.row, target.col, 19001, itemSlot);
+          this.io.send(pBuf);
+        } else {
+          let pSkillId = Number(pAct.skillId) || 10000;
+          const pSkillDef = (skillDataRaw as Record<string, any>)[String(pSkillId)];
+          const reqPSp = pSkillDef?.sp ?? 0;
+          const maxPSp = Math.max(charUnit?.sp.max ?? 0, this.player.sp.max);
+          if (maxPSp > 0 && pSkillId !== 10000 && pSkillId !== 17001 && pSkillId !== 18001 && reqPSp > 0 && curPSp < reqPSp) {
+            this.io.game(`⚠️ [${this.player.name || "Nhân vật"}] không đủ SP (${curPSp}/${reqPSp}), chuyển sang [Đấu Vật]`);
+            pSkillId = 10000;
+          }
 
-        const pTargetPref = pAct.target || "F1";
-        const pIsSupp = this.isSupportSkill(pSkillId, pTargetPref);
-        const pTarget = (pSkillId === 17001 || pSkillId === 18001)
-          ? { row: pRow, col: pCol, label: pSkillId === 18001 ? "Bỏ chạy" : "Bản thân" }
-          : this.resolveTarget(pTargetPref, pIsSupp);
+          const pTargetPref = pAct.target || "F1";
+          const pIsSupp = this.isSupportSkill(pSkillId, pTargetPref);
+          const pTarget = (pSkillId === 17001 || pSkillId === 18001)
+            ? { row: pRow, col: pCol, label: pSkillId === 18001 ? "Bỏ chạy" : "Bản thân" }
+            : this.resolveTarget(pTargetPref, pIsSupp);
 
-        const pBuf = this.encodeBattleActionFrame(pRow, pCol, pTarget.row, pTarget.col, pSkillId);
-        this.io.send(pBuf);
+          const pBuf = this.encodeBattleActionFrame(pRow, pCol, pTarget.row, pTarget.col, pSkillId);
+          this.io.send(pBuf);
+        }
       }
     } else {
       this.io.log("info", `[Chiến đấu] ${this.player.name || "Nhân vật"} đã gục ngã (HP = 0) — bỏ qua lượt đánh của nhân vật.`);
@@ -5357,8 +5436,8 @@ class TsOnlineSession implements CodecSession {
 
         const petSkillDef = (skillDataRaw as Record<string, any>)[String(petSkillId)];
         const reqSp = petSkillDef?.sp ?? 0;
-        const curPetSp = petUnit?.sp.cur ?? this.pet.sp.cur;
-        const maxPetSp = petUnit?.sp.max || this.pet.sp.max;
+        const curPetSp = Math.max(petUnit?.sp.cur ?? 0, this.pet.sp.cur);
+        const maxPetSp = Math.max(petUnit?.sp.max ?? 0, this.pet.sp.max);
         if (maxPetSp > 0 && petSkillId !== 10000 && petSkillId !== 17001 && petSkillId !== 18001 && reqSp > 0 && curPetSp < reqSp) {
           this.io.game(`⚠️ [${this.pet.name || "Võ tướng"}] không đủ SP (${curPetSp}/${reqSp}), chuyển sang [Đấu Vật]`);
           petSkillId = 10000;
@@ -5378,6 +5457,8 @@ class TsOnlineSession implements CodecSession {
     const pType = pAct.type;
     const pDesc = !isCharAlive
       ? "Gục ngã"
+      : didRevive
+      ? `Hồi Sinh [${reviveTargetName}]`
       : pType === "summon"
       ? `Xuất chiến [${pAct.petName || pAct.petModel}]`
       : pType === "item"
@@ -5634,6 +5715,12 @@ class TsOnlineSession implements CodecSession {
       };
 
       if (isAlly) {
+        if (curHp === 0 && !isMiss && damage > 0) {
+          this.allyFaintedInBattle = true;
+          if (!this.faintedAllyName) {
+            this.faintedAllyName = targetName || (targetRow === 2 ? "Võ tướng" : "Nhân vật");
+          }
+        }
         this.queueAllyStrike(strike);
       } else {
         this.flushPendingStrikes();
@@ -5654,6 +5741,13 @@ class TsOnlineSession implements CodecSession {
     this.flushPendingStrikes();
     if (this.inBattle) {
       this.inBattle = false;
+      const isPlayerDead = this.player.hp.max > 0 && this.player.hp.cur <= 0;
+      const actPet = this.activePet();
+      const isPetDead = Boolean(actPet && this.pet.hp.max > 0 && this.pet.hp.cur <= 0);
+      const anyAllyDead = this.battleUnits.some((u) => !u.isEnemy && u.hp.max > 0 && u.hp.cur === 0);
+      const hasFainted = this.allyFaintedInBattle || isPlayerDead || isPetDead || anyAllyDead;
+      const victim = this.faintedAllyName || (isPlayerDead ? "Nhân vật" : (isPetDead ? "Võ tướng" : (this.battleUnits.find((u) => !u.isEnemy && u.hp.max > 0 && u.hp.cur === 0)?.name ?? "Thành viên / Võ tướng")));
+
       this.battleUnits = [];
       this.battleTurnIndex = 0;
       this.battleConfig = { ...this.battleConfig, currentTurn: 0 };
@@ -5669,14 +5763,115 @@ class TsOnlineSession implements CodecSession {
       this.io.game("🎉 Trận đấu kết thúc!");
       // Phó bản: hết trận còn thoại kết thúc/kết quả cần đáp 14/06 (vd sau trận Trương Giác) — giữ cửa sổ đáp thêm 60s nếu vừa ở trong cửa sổ.
       if (Date.now() <= this.dialogAckUntil + 60_000) this.openDialogWindow(60_000);
-      setTimeout(() => {
-        this.triggerAutoSweep();
-        this.triggerAutoHeal();
-        this.scheduleChaseCheck(700);
-        if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
-          this.scheduleAutoMove(1000);
+
+      if (this.autoHeal.safeSpotOnFaint && (hasFainted || this.pendingFaintTeleport)) {
+        this.pendingFaintTeleport = true;
+
+        if (this.chaseCheckTimer) {
+          clearTimeout(this.chaseCheckTimer);
+          this.chaseCheckTimer = undefined;
         }
-      }, 500);
+        if (this.autoMoveTimer) {
+          clearTimeout(this.autoMoveTimer);
+          this.autoMoveTimer = undefined;
+        }
+        this.chaseRunning = false;
+        this.chaseConfig = { ...this.chaseConfig, enabled: false };
+        this.autoMove = { ...this.autoMove, enabled: false };
+        this.io.patchState({ chaseConfig: this.chaseConfig, autoMove: this.autoMove });
+
+        setTimeout(() => {
+          this.triggerAutoSweep();
+          this.triggerAutoHeal();
+        }, 300);
+
+        const snap = this.party.snapshot(this.selfHex);
+        const selfMember = snap.members.find((m) => m.isSelf);
+        const isLeader = Boolean(selfMember?.isLeader) || (!snap.joined && this.partyTargetConfig.role === "leader");
+        const isMember = snap.joined && !isLeader;
+
+        if (isMember) {
+          // Thành viên có bật tính năng: Lập tức rời đội và teleport về Cửa thành Tương Dương
+          this.io.game(`🚨 [Bảo Vệ Thành Viên] Phát hiện [${victim}] bị gục ngã trong trận! Lập tức rời đội và teleport về Cửa thành Tương Dương...`);
+          if (this.selfHex) {
+            this.sendParty(PARTY_SUB.LEAVE, partyPayload(this.selfHex), "RỜI ĐỘI BẢO VỆ");
+            this.party.remove(this.selfHex);
+            this.partyStatus = "";
+            this.publishParty();
+          }
+          setTimeout(() => {
+            if (!this.inBattle) {
+              this.teleportToTuongDuong();
+              this.io.game("🛡️ [Bảo Vệ] Đã rời đội và teleport về Cửa thành Tương Dương an toàn!");
+            }
+          }, 400);
+        } else {
+          // Chủ PT (hoặc solo): Lập tức teleport đưa cả đội về Cửa thành Tương Dương
+          const roleDesc = snap.joined ? "Chủ PT" : "Nhân vật";
+          this.io.game(`🚨 [Bảo Vệ Tổ Đội] Phát hiện [${victim}] bị gục ngã trong trận! ${roleDesc} lập tức teleport đưa cả đội về Cửa thành Tương Dương...`);
+          setTimeout(() => {
+            if (!this.inBattle) {
+              this.teleportToTuongDuong();
+              this.io.game("🛡️ [Bảo Vệ] Đã teleport đưa cả đội về Cửa thành Tương Dương an toàn!");
+            }
+          }, 500);
+        }
+      } else {
+        setTimeout(() => {
+          this.triggerAutoSweep();
+          this.triggerAutoHeal();
+          this.scheduleChaseCheck(700);
+          if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
+            this.scheduleAutoMove(1000);
+          }
+        }, 500);
+      }
+    }
+  }
+
+  private teleportToTuongDuong(): void {
+    const id = 21001; // Cửa thành Tương Dương
+    const gateIndex = 13; // Index cổng thành Tương Dương trong danh sách Warp_C.dat
+    this.pendingGate = { id, city: "Tương Dương" };
+    this.io.send(encodeFrame(cmdBody(0x44, 0x01, [0x00, id & 0xff, id >> 8, gateIndex])));
+    setTimeout(() => {
+      this.io.send(encodeFrame(cmdBody(0x07, 0x01, [0x00])));
+    }, 250);
+    setTimeout(() => {
+      this.io.send(encodeFrame(cmdBody(0x0c, 0x01, [0x00])));
+    }, 600);
+  }
+
+  private async moveToSafeSpotOnFaint(who: string): Promise<void> {
+    const mapId = this.location.map;
+    if (!mapId) return;
+
+    const safeSpot = getSafeSpotForMap(mapId, this.location.x, this.location.y);
+    if (!safeSpot) {
+      this.io.game(`⚠️ [Bảo Vệ] ${who} đã bị gục ngã nhưng không tìm thấy vị trí an toàn cho Map ${mapId}!`);
+      return;
+    }
+
+    const curDist = Math.hypot((this.location.x ?? 0) - safeSpot.x, (this.location.y ?? 0) - safeSpot.y);
+    if (curDist <= 25) {
+      this.io.game(`🛡️ [Bảo Vệ] ${who} đã bị gục ngã! Đang ở vị trí an toàn (${safeSpot.x}, ${safeSpot.y}). Treo máy an toàn.`);
+      return;
+    }
+
+    this.io.game(`🛡️ [Bảo Vệ] ${who} đã bị NPC đánh gục ngã! Đang di chuyển đến vị trí an toàn (${safeSpot.x}, ${safeSpot.y}) và treo máy tại đây...`);
+
+    const abortCtrl = new AbortController();
+    try {
+      await this.walkWaypoints([{ x: safeSpot.x, y: safeSpot.y }], (b) => this.io.send(b), abortCtrl.signal);
+      for (let i = 0; i < 2; i++) {
+        this.io.send(encodeFrame(cmdBody(0x06, 0x01, [0x00, 0x00, safeSpot.x & 0xff, (safeSpot.x >> 8) & 0xff, safeSpot.y & 0xff, (safeSpot.y >> 8) & 0xff])));
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      this.location = { ...this.location, x: safeSpot.x, y: safeSpot.y };
+      this.io.patchState({ location: this.location });
+      this.io.game(`🛡️ [Bảo Vệ] Đã di chuyển đến vị trí an toàn (${safeSpot.x}, ${safeSpot.y}) thành công! Đang treo máy an toàn.`);
+    } catch (err) {
+      this.io.log("warn", `[Bảo Vệ] Lỗi khi di chuyển về vị trí an toàn: ${err}`);
     }
   }
 

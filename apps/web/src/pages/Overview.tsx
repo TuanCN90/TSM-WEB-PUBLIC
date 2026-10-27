@@ -109,12 +109,14 @@ const FEATURES: Feature[] = [
       "Cơ chế F1 thông minh: tính toán tâm chấn để kỹ năng lan quét trúng tối đa quái còn sống (tâm cụm quái), đồng thời đồng bộ mục tiêu giữa toàn đội để đảm bảo tỷ lệ hợp kích cao nhất.",
       "Bộ kỹ năng võ tướng hiển thị đầy đủ cả 5 skill (3 gốc, 1 Mê, 1 VKCD); tự động khóa các skill chưa đủ điều kiện (chưa học Mê hoặc chưa đeo VKCD).",
       "Cơ chế phân lập vị trí tổ đội: mỗi thành viên chỉ ra lệnh cho nhân vật và võ tướng ở đúng cột (col = pCol) của mình trên lưới trận; loại bỏ hoàn toàn gói tin 41/01 thừa lúc vào trận (0b/fa); loại bỏ hoàn toàn lỗi ngắt kết nối máy chủ (kick mã 42) do thao tác nhầm.",
+      "Tự động khôi phục cấu hình trận đấu: khi mất kết nối mạng hoặc server ngắt kết nối và bot tự reconnect thành công, toàn bộ cài đặt skill Char/Pet, 21 turn và danh sách auto vật phẩm được tự động nạp lại vào phiên mới, chống triệt để tình trạng rơi về Đấu Vật sau thời gian dài treo máy.",
       "Tự đánh theo kỹ năng đã chọn, có chế độ tự bỏ chạy và giới hạn số lượt.",
     ],
     rules: [
       "Chỉ ra lệnh cho đơn vị của chính tài khoản mình (không điều khiển thú của người khác hay vị trí cột 2 của chủ PT).",
       "Nếu thành viên không có võ tướng xuất chiến trong trận thì tuyệt đối không gửi lệnh võ tướng lên máy chủ.",
       "Gom và hiển thị đầy đủ tất cả thành viên tham gia combo và toàn bộ quái trúng chiêu lan.",
+      "Cơ chế hợp nhất thông minh (smart merge): cập nhật tính năng phụ (như bật/tắt tự bỏ chạy) không làm mất hoặc reset kỹ năng nhân vật và võ tướng về mặc định.",
       "Tự động chuyển về Đấu Vật nếu kỹ năng võ tướng chọn chưa khả dụng hoặc thiếu SP.",
       "Trận đấu là tab cố định, không phải popup.",
     ],
@@ -437,10 +439,14 @@ const FEATURES: Feature[] = [
     logic: [
       "Quy trình 'Bán xong rồi mua' tự dịch chuyển đến NPC Thương nhân Hương Dũng (12701), đồng bộ danh sách bán tức thời và bán vật phẩm trong túi đồ trước khi mua HP/SP.",
       "Tự động dùng vật phẩm HP/SP trong túi đồ khi máu/SP nhân vật hoặc võ tướng xuống dưới ngưỡng đã đặt.",
+      "Tự động về Tương Dương khi có slot gục ngã: khi có bất kỳ slot nào trong tổ đội (char hoặc pet) bị NPC đánh gục ngã trong trận, hết trận nếu Chủ PT bật tính năng thì teleport đưa cả team về Cửa thành Tương Dương (21001); nếu Chủ PT không bật mà Thành viên bật thì thành viên lập tức rời đội và teleport về Cửa thành Tương Dương để treo máy an toàn.",
+      "Tự động Hồi Sinh đồng đội tử trận: trong trận đấu, nếu nhân vật đã lĩnh hội kỹ năng Hồi Sinh (11013) hệ Thủy và có bất kỳ slot đồng đội nào (char hoặc pet) bị NPC đánh gục ngã, lượt tiếp theo nhân vật sẽ ưu tiên dùng Hồi Sinh vào đúng vị trí đó bất kể thiết lập kỹ năng của lượt đó là gì; nếu chưa học skill hệ thống sẽ tự động vô hiệu hóa tính năng và cảnh báo 'Ní chưa lĩnh hội thần thông hồi sinh rồi'.",
     ],
     rules: [
-      "Ngưỡng và số lượng cấu hình riêng biệt 100% cho từng tài khoản.",
+      "Ngưỡng, số lượng, cờ tự động về Tương Dương và cờ Hồi Sinh cấu hình riêng biệt 100% cho từng tài khoản (canonicalKey).",
       "Nếu túi đồ không có vật phẩm khớp danh sách bán (hoặc chưa chọn món), bot thông báo rõ ràng ra bảng Sự kiện và chuyển sang bước mua HP/SP an toàn.",
+      "Ở chế độ tổ đội: Chủ PT bật sẽ kéo cả đội về Tương Dương; Thành viên bật (khi Chủ PT không bật) sẽ tự động rời đội rồi teleport về Tương Dương.",
+      "Tính năng Hồi Sinh yêu cầu nhân vật học skill Hồi Sinh (11013) hệ Thủy và còn đủ 40 SP; khi hết trận hoặc đồng đội đã sống lại (HP > 0), bot tự quay lại chu kỳ chiến thuật bình thường.",
     ],
   },
   {

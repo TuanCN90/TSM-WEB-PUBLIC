@@ -33,11 +33,15 @@ export function CommonConfigPanel({ accountId, can, ch, act, onToast }: Props) {
     player: DEFAULT_TARGET(50),
     pet: DEFAULT_TARGET(50),
     slots: {},
+    safeSpotOnFaint: false,
+    autoReviveAlly: false,
   });
 
   const [partyCfg, setPartyCfg] = useState<PartyConfig | null>(null);
   const [partyLoading, setPartyLoading] = useState(false);
   const [partySaving, setPartySaving] = useState(false);
+
+  const hasReviveSkill = Boolean(ch.playerSkills?.some((s) => s.id === 11013));
 
   // Tải cấu hình theo accountId
   useEffect(() => {
@@ -52,6 +56,8 @@ export function CommonConfigPanel({ accountId, can, ch, act, onToast }: Props) {
           player: { ...DEFAULT_TARGET(50), ...(h?.player ?? {}) },
           pet: { ...DEFAULT_TARGET(50), ...(h?.pet ?? {}) },
           slots: h?.slots ?? {},
+          safeSpotOnFaint: h?.safeSpotOnFaint ?? false,
+          autoReviveAlly: h?.autoReviveAlly ?? false,
         });
       })
       .catch(() => {
@@ -60,6 +66,8 @@ export function CommonConfigPanel({ accountId, can, ch, act, onToast }: Props) {
           player: DEFAULT_TARGET(50),
           pet: DEFAULT_TARGET(50),
           slots: {},
+          safeSpotOnFaint: false,
+          autoReviveAlly: false,
         });
       })
       .finally(() => setLoading(false));
@@ -592,6 +600,129 @@ export function CommonConfigPanel({ accountId, can, ch, act, onToast }: Props) {
 
       {subTab === "other" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Card: Tự Động Về Cổng Thành Tương Dương Khi Gục Ngã */}
+          <section className="card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 24 }}>🏰</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, color: "var(--text)" }}>
+                    Tự Động Về Tương Dương Khi Có Slot Gục Ngã
+                  </h3>
+                  <div className="muted small" style={{ fontSize: 12, marginTop: 2 }}>
+                    Khi có bất kỳ slot nào trong tổ đội (nhân vật hoặc võ tướng) bị gục ngã trong trận, lập tức teleport về Cửa thành Tương Dương.
+                  </div>
+                </div>
+              </div>
+              <label className="switch" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  disabled={!can || loading || saving}
+                  checked={!!cfg.safeSpotOnFaint}
+                  onChange={(e) => saveConfig({ ...cfg, safeSpotOnFaint: e.target.checked })}
+                />
+                <span style={{ fontWeight: 700, fontSize: 13, color: cfg.safeSpotOnFaint ? "var(--ok)" : "var(--muted)" }}>
+                  {cfg.safeSpotOnFaint ? "ĐANG BẬT" : "TẮT"}
+                </span>
+              </label>
+            </div>
+
+            {/* Quy tắc hoạt động */}
+            <div style={{ background: "var(--panel-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--line)" }}>
+              <b style={{ fontSize: 13, display: "block", marginBottom: 6, color: "var(--accent-ink)" }}>
+                📋 Quy tắc hoạt động:
+              </b>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.7, color: "var(--text)" }}>
+                <li>
+                  <b>Chủ PT bật tính năng:</b> Khi có <b>bất kỳ slot nào trong tổ đội</b> (nhân vật hoặc võ tướng của bất kỳ thành viên nào) bị đánh gục ngã trong trận $\rightarrow$ Hết trận, Chủ PT lập tức gửi lệnh warp / teleport (44/01) đưa <b>cả team về Cửa thành Tương Dương (21001)</b>.
+                </li>
+                <li>
+                  <b>Chủ PT không bật mà Thành viên bật:</b> Khi có bất kỳ slot nào trong tổ đội bị gục ngã $\rightarrow$ Thành viên bật tính năng này sẽ <b>lập tức rời đội và teleport về Cửa thành Tương Dương (21001)</b>.
+                </li>
+                <li>
+                  <b>Đi Solo (không trong đội):</b> Khi nhân vật hoặc võ tướng của mình bị gục ngã $\rightarrow$ Hết trận lập tức teleport về Cửa thành Tương Dương để treo máy an toàn.
+                </li>
+                <li>
+                  <b>Dừng truy kích:</b> Ngay khi kích hoạt, bot lập tức ngắt bỏ tự động truy kích quái và di chuyển bãi để đảm bảo đứng treo tuyệt đối an toàn tại thành Tương Dương.
+                </li>
+              </ul>
+            </div>
+          </section>
+
+          {/* Card: Sử Dụng Hồi Sinh Cho Đồng Đội Tử Trận */}
+          <section className="card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 24 }}>💫</span>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <h3 style={{ margin: 0, fontSize: 16, color: "var(--text)" }}>
+                      Sử Dụng Hồi Sinh Cho Đồng Đội Tử Trận
+                    </h3>
+                    {hasReviveSkill ? (
+                      <span className="badge" style={{ background: "rgba(34, 197, 94, 0.15)", color: "#16a34a", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
+                        Đã học Hồi Sinh (11013)
+                      </span>
+                    ) : (
+                      <span className="badge" style={{ background: "rgba(239, 68, 68, 0.15)", color: "#dc2626", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
+                        Chưa học Hồi Sinh
+                      </span>
+                    )}
+                  </div>
+                  <div className="muted small" style={{ fontSize: 12, marginTop: 2 }}>
+                    Khi có bất kỳ slot đồng đội nào (char hoặc pet) bị NPC đánh gục ngã trong trận, ở lượt sau nhân vật ưu tiên dùng kỹ năng Hồi Sinh vào vị trí đó.
+                  </div>
+                </div>
+              </div>
+              <div
+                onClick={() => {
+                  if (!hasReviveSkill) {
+                    onToast("error", "Ní chưa lĩnh hội thần thông hồi sinh rồi");
+                  }
+                }}
+              >
+                <label className="switch" style={{ display: "flex", alignItems: "center", gap: 8, cursor: hasReviveSkill ? "pointer" : "not-allowed", opacity: hasReviveSkill ? 1 : 0.6 }}>
+                  <input
+                    type="checkbox"
+                    disabled={!can || loading || saving || !hasReviveSkill}
+                    checked={!!cfg.autoReviveAlly && hasReviveSkill}
+                    onChange={(e) => {
+                      if (!hasReviveSkill) {
+                        onToast("error", "Ní chưa lĩnh hội thần thông hồi sinh rồi");
+                        return;
+                      }
+                      saveConfig({ ...cfg, autoReviveAlly: e.target.checked });
+                    }}
+                  />
+                  <span style={{ fontWeight: 700, fontSize: 13, color: (cfg.autoReviveAlly && hasReviveSkill) ? "var(--ok)" : "var(--muted)" }}>
+                    {(cfg.autoReviveAlly && hasReviveSkill) ? "ĐANG BẬT" : "TẮT"}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Quy tắc hoạt động */}
+            <div style={{ background: "var(--panel-2)", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--line)" }}>
+              <b style={{ fontSize: 13, display: "block", marginBottom: 6, color: "var(--accent-ink)" }}>
+                📋 Quy tắc hoạt động:
+              </b>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.7, color: "var(--text)" }}>
+                <li>
+                  <b>Điều kiện kích hoạt:</b> Nhân vật phải học kỹ năng <b>Hồi Sinh (11013 - Hệ Thủy)</b> và còn đủ 40 SP. Nếu chưa học skill, hệ thống sẽ tự động vô hiệu hóa tính năng và thông báo: <i>"Ní chưa lĩnh hội thần thông hồi sinh rồi"</i>.
+                </li>
+                <li>
+                  <b>Ưu tiên tuyệt đối trong lượt:</b> Trong trận đấu, khi phát hiện có bất kỳ đồng đội nào (Nhân vật hoặc Võ tướng) bị NPC đánh gục ngã (HP = 0), ở lượt tiếp theo nhân vật sẽ lập tức <b>ưu tiên dùng kỹ năng Hồi Sinh vào đúng vị trí ô đồng đội đã gục ngã</b>, bỏ qua bất kỳ thiết lập kỹ năng nào của lượt đó.
+                </li>
+                <li>
+                  <b>Thứ tự ưu tiên cứu trợ:</b> Ưu tiên cứu nhân vật đồng đội trước, sau đó tới võ tướng của đội hoặc của bản thân.
+                </li>
+                <li>
+                  <b>Tự động trở lại chu kỳ:</b> Sau khi đồng đội được hồi sinh thành công (HP &gt; 0) và không còn slot nào gục ngã, nhân vật sẽ tự động quay lại sử dụng kỹ năng bình thường theo đúng cấu hình chiến thuật đã cài đặt.
+                </li>
+              </ul>
+            </div>
+          </section>
+
           {/* Card: Tự Động Bỏ Chạy Khi Chưa Đủ Thành Viên Tổ Đội */}
           <section className="card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 12 }}>

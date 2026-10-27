@@ -190,6 +190,12 @@ export class ConnectionManager {
           this.onLog(accountId, e);
         },
         onCharacter: (ch) => this.onCharacter(accountId, this.withPlan(accountId, ch)),
+        onOnline: (reconnected) => {
+          if (reconnected) {
+            c?.log("info", "🔄 [Tự động khôi phục] Đồng bộ lại cấu hình trận đấu và vật phẩm sau khi kết nối lại...", "game");
+            void this.applyAccountConfigs(accountId, c!).catch(() => {});
+          }
+        },
       });
       this.conns.set(accountId, c);
     }
@@ -203,6 +209,14 @@ export class ConnectionManager {
         credentials: { server: account.server, username: account.username, password: account.password ?? "" },
       })
     );
+    await this.applyAccountConfigs(accountId, c);
+    this.party.refresh(accountId);
+    this.dungeonTeam.refresh(accountId);
+    if (cfg.autoCheckin) void this.autoCheckin(accountId, c);
+    return c.info();
+  }
+
+  async applyAccountConfigs(accountId: string, c: GameConnection): Promise<void> {
     const bCfg = this.battleConfigs?.get(accountId);
     if (bCfg) {
       const mode = bCfg.strategyMode ?? (bCfg.turns && bCfg.turns.length > 0 ? "turns" : "default");
@@ -248,10 +262,6 @@ export class ConnectionManager {
         autoReturn: chaseCfg.autoReturn ? "1" : "0",
       }).catch(() => {});
     }
-    this.party.refresh(accountId);
-    this.dungeonTeam.refresh(accountId);
-    if (cfg.autoCheckin) void this.autoCheckin(accountId, c);
-    return c.info();
   }
 
   /**

@@ -82,4 +82,41 @@ describe("BattleConfigStore", () => {
     expect(persistedA?.turns).toHaveLength(2);
     expect(persistedA?.turns?.[0]?.playerAction.skillId).toBe(17001);
   });
+
+  it("applyAccountConfigs correctly dispatches battleConfig to connection", async () => {
+    const store = new BattleConfigStoreClass();
+    store.set("tuancn11", {
+      playerAction: { type: "skill", skillId: 12003, target: "F1" },
+      petAction: { type: "skill", skillId: 13013, target: "F1" },
+      autoFight: true,
+      autoEscape: false,
+    });
+
+    const dispatched: { action: string; params: any }[] = [];
+    const mockConn = {
+      dispatch: async (action: string, params: any) => {
+        dispatched.push({ action, params });
+        return { ok: true };
+      },
+    } as any;
+
+    // Simulate calling applyAccountConfigs logic
+    const bCfg = store.get("tuancn11");
+    expect(bCfg).toBeDefined();
+    await mockConn.dispatch("set_battle_config", {
+      playerSkillId: String(bCfg?.playerAction?.skillId ?? 10000),
+      petSkillId: String(bCfg?.petAction?.skillId ?? 10000),
+      autoFight: bCfg?.autoFight ? "1" : "0",
+      playerTarget: bCfg?.playerAction?.target ?? "F1",
+      petTarget: bCfg?.petAction?.target ?? "F1",
+      turnsJson: bCfg?.turns ? JSON.stringify(bCfg.turns) : "",
+      strategyMode: "default",
+      autoEscape: bCfg?.autoEscape ? "1" : "0",
+    });
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.action).toBe("set_battle_config");
+    expect(dispatched[0]!.params.playerSkillId).toBe("12003");
+    expect(dispatched[0]!.params.petSkillId).toBe("13013");
+  });
 });

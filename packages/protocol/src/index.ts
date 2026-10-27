@@ -1070,6 +1070,10 @@ export interface AutoHealConfig {
   pet: AutoHealTargetConfig;
   /** Cấu hình riêng cho từng slot võ tướng 1..4 (nếu có nhu cầu cấu hình riêng) */
   slots?: Record<number, AutoHealTargetConfig>;
+  /** Tự động di chuyển đến vị trí an toàn khi Pet hoặc Char bị NPC đánh gục ngã (HP = 0) */
+  safeSpotOnFaint?: boolean;
+  /** Tự động dùng kỹ năng Hồi Sinh (11013) cho đồng đội tử trận trong trận đấu */
+  autoReviveAlly?: boolean;
 }
 
 export type ItemLists = Record<ItemListKey, number[]> & {

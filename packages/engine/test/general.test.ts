@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import fx from "./fixtures/general-cap.json";
 import { encodeFrame, tsOnlineCodec } from "../src/transport/socket/codecs/tsOnline";
-import { buildSteps } from "../src/runtime/liveActions";
+import { buildCommand, buildSteps } from "../src/runtime/liveActions";
 
 /** Payload f[8..] lấy từ pcap 22/10 (Check_status_team_pet, Change_pet_xuat_chien, Nhan_exp_offline_Free, Nhan_all_email_gifts). */
 const frame = (cmd: number, sub: number, hex: string) => encodeFrame(Buffer.concat([Buffer.from([0, 0, cmd, sub]), Buffer.from(hex, "hex")]));
@@ -333,6 +333,17 @@ describe("Hệ thống Trận đấu & Kỹ năng (Treo Rung 30 Dau Vat.pcap)", 
     s.encodeAction("set_battle_config", ["10000", "11005", "1", "10", "18"]);
     expect(st().battleConfig.playerAction.target).toBe("10");
     expect(st().battleConfig.petAction.target).toBe("18");
+
+    // Chỉ cập nhật autoEscape (ví dụ boss thế giới hoặc phó bản đơn bật/tắt bỏ chạy): không làm mất skill Char và Pet!
+    s.encodeAction("set_battle_config", ["", "", "", "", "", "", "", "1"]);
+    expect(st().battleConfig.playerAction.skillId).toBe(10000);
+    expect(st().battleConfig.petAction.skillId).toBe(11005);
+    expect(st().battleConfig.autoEscape).toBe(true);
+
+    const cmd = buildCommand("set_battle_config", { autoEscape: "0" });
+    expect(cmd.args[0]).toBe("");
+    expect(cmd.args[1]).toBe("");
+    expect(cmd.args[7]).toBe("0");
   });
 
   it("Chiến thuật theo từng Turn (Turn 1..21) và tự động lặp lại từ Turn 1 khi trận kéo dài hơn 21 turn", () => {
@@ -1364,12 +1375,17 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
     // 51 df 0b 31 38 9e e6 40 (start OLE)
     // a6 34 61 86 3d 9e e6 40 (end OLE = start + 4h)
     // 01 01 28 15
-    s.onData(frame(0x56, 0x03, "00010151df0b31389ee640a63461863d9ee64001012815"));
-    expect(st().escort).toBeDefined();
-    expect(st().escort!.phase).toBe("escorting");
-    expect(st().escort!.activeEscort).toBeDefined();
-    expect(st().escort!.activeEscort!.slot).toBe(1);
-    expect(st().escort!.activeEscort!.durationHours).toBe(4);
+    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(1729900000000);
+    try {
+      s.onData(frame(0x56, 0x03, "00010151df0b31389ee640a63461863d9ee64001012815"));
+      expect(st().escort).toBeDefined();
+      expect(st().escort!.phase).toBe("escorting");
+      expect(st().escort!.activeEscort).toBeDefined();
+      expect(st().escort!.activeEscort!.slot).toBe(1);
+      expect(st().escort!.activeEscort!.durationHours).toBe(4);
+    } finally {
+      dateSpy.mockRestore();
+    }
   });
 
   it("escort_start gửi đúng gói 56/02 và chặn nếu pet đang vận tiêu", async () => {
@@ -1468,6 +1484,163 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
       expect(dec[1]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3a, 0x00])); // mốc 58
       expect(dec[2]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3c, 0x00])); // mốc 60
       expect(dec[3]).toEqual(Buffer.from([0x4d, 0x0b, 0x00, 0x81, 0x3e, 0x00])); // mốc 62
+    });
+
+    it("safeSpotOnFaint (Chủ PT / Solo): khi có slot gục ngã (HP = 0), hết trận tự động teleport về Cửa thành Tương Dương", async () => {
+      const { s, sent, games, st } = setup();
+      // Bật tính năng trong autoHeal
+      s.encodeAction("set_auto_heal", [JSON.stringify({ safeSpotOnFaint: true })]);
+
+      // Nạp vào map bãi quái
+      const movePayload = Buffer.alloc(16);
+      movePayload.writeUInt16LE(12815, 17 - 8);
+      movePayload.writeUInt16LE(500, 19 - 8);
+      movePayload.writeUInt16LE(1500, 21 - 8);
+      movePayload[23 - 8] = 0;
+      s.onData(frame(0x07, 0x00, movePayload.toString("hex")));
+
+      // Vào trận đấu 14/0c
+      s.onData(frame(0x14, 0x0c, "00"));
+      expect(st().inBattle).toBe(true);
+
+      // Cập nhật HP của một slot đồng minh về 0 (33/01 row=3, col=2, stat=0x19, val=0)
+      s.onData(frame(0x33, 0x01, "000003021900000000"));
+
+      sent.length = 0;
+      // Kết thúc trận đấu 0b/00
+      s.onData(frame(0x0b, 0x00, "00"));
+      expect(st().inBattle).toBe(false);
+
+      // Chờ hàm teleport kích hoạt
+      await new Promise((r) => setTimeout(r, 900));
+
+      // Kiểm tra có thông báo bảo vệ phát ra
+      expect(games.some((g) => g.includes("[Bảo Vệ Tổ Đội]") && g.includes("Tương Dương"))).toBe(true);
+
+      // Giải mã các gói tin gửi lên server
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // Kiểm tra có gói 44/01 teleport tới Tương Dương (id 21001 = 0x5209, gateIndex = 13 = 0x0d)
+      const hasTeleportTuongDuong = dec.some(
+        (b) => b[0] === 0x44 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x09 && b[4] === 0x52 && b[5] === 0x0d
+      );
+      expect(hasTeleportTuongDuong).toBe(true);
+    });
+
+    it("safeSpotOnFaint (Thành viên): khi có slot gục ngã, thành viên tự động rời đội rồi teleport về Tương Dương", async () => {
+      const { s, sent, games, st } = setup();
+      s.encodeAction("set_auto_heal", [JSON.stringify({ safeSpotOnFaint: true })]);
+
+      // Nạp danh tính UID của bản thân
+      (s as unknown as { uid: Buffer }).uid = Buffer.from("1122334455667788", "hex");
+
+      // Giả lập đang là thành viên trong tổ đội (chủ PT a1b2c3d4e5f60708, joiner 1122334455667788)
+      s.onData(frame(0x0d, 0x05, "00a1b2c3d4e5f607081122334455667788"));
+
+      // Vào trận đấu 14/0c
+      s.onData(frame(0x14, 0x0c, "00"));
+      expect(st().inBattle).toBe(true);
+
+      // Cập nhật một slot đồng minh bị gục ngã
+      s.onData(frame(0x33, 0x01, "000002021900000000"));
+
+      sent.length = 0;
+      // Kết thúc trận đấu 0b/00
+      s.onData(frame(0x0b, 0x00, "00"));
+      expect(st().inBattle).toBe(false);
+
+      // Chờ kích hoạt rời đội (ngay lập tức) và teleport (sau 400ms)
+      await new Promise((r) => setTimeout(r, 900));
+
+      // Kiểm tra thông báo bảo vệ thành viên
+      expect(games.some((g) => g.includes("[Bảo Vệ Thành Viên]"))).toBe(true);
+
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // 1. Có gói rời đội 0d/04
+      const hasLeaveParty = dec.some((b) => b[0] === 0x0d && b[1] === 0x04);
+      expect(hasLeaveParty).toBe(true);
+
+      // 2. Có gói teleport 44/01 về Tương Dương (21001 = 0x5209, gateIndex = 13 = 0x0d)
+      const hasTeleport = dec.some(
+        (b) => b[0] === 0x44 && b[1] === 0x01 && b[3] === 0x09 && b[4] === 0x52 && b[5] === 0x0d
+      );
+      expect(hasTeleport).toBe(true);
+    });
+
+    it("autoReviveAlly: khi có đồng đội gục ngã và nhân vật có skill 11013, ưu tiên dùng Hồi Sinh vào ô đồng đội", async () => {
+      const { s, sent, games, st } = setup();
+      // Nạp skill Hồi Sinh 11013 cho nhân vật
+      (s as any).playerSkills = [
+        { id: 11013, name: "Hồi Sinh", desc: "Giúp người chết sống lại", level: 10, sp: 40 },
+      ];
+      (s as any).player.sp = { cur: 100, max: 100 };
+
+      // Bật tính năng autoReviveAlly trong autoHeal
+      s.encodeAction("set_auto_heal", [JSON.stringify({ autoReviveAlly: true })]);
+
+      // Cài đặt chiến thuật turn là Đấu Vật (10000)
+      s.encodeAction("set_battle_config", [JSON.stringify({
+        autoFight: true,
+        playerAction: { type: "attack", skillId: 10000, target: "F1" },
+        petAction: { type: "attack", skillId: 10000, target: "F1" },
+      })]);
+
+      // Vào trận đấu 14/0c
+      s.onData(frame(0x14, 0x0c, "00"));
+      expect(st().inBattle).toBe(true);
+
+      // Thêm 1 đồng đội nhân vật (hàng 3, cột 3) và 1 quái (hàng 0, cột 2)
+      (s as any).battleUnits = [
+        { row: 3, col: 2, name: "Nhân vật", level: 100, hp: { cur: 1000, max: 1000 }, sp: { cur: 100, max: 100 }, isEnemy: false, isPet: false },
+        { row: 3, col: 3, name: "Đồng đội A", level: 100, hp: { cur: 0, max: 1000 }, sp: { cur: 50, max: 100 }, isEnemy: false, isPet: false },
+        { row: 0, col: 2, name: "Quái Bãi", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+      ];
+
+      sent.length = 0;
+      // Đến lượt đánh 34/01
+      s.onData(frame(0x34, 0x01, "00"));
+
+      // Kiểm tra có thông báo ưu tiên Hồi Sinh phát ra
+      expect(games.some((g) => g.includes("ưu tiên dùng [Hồi Sinh] lên đồng đội [Đồng đội A] (3, 3)"))).toBe(true);
+
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // Kiểm tra gói 32/01 battle action được gửi:
+      // actorRow=3, actorCol=2, targetRow=3, targetCol=3, skillId=11013 (11013 = 0x2b05 -> 0x05, 0x2b)
+      const hasReviveAction = dec.some((b) =>
+        b[0] === 0x32 && b[1] === 0x01 && b[2] === 0x00 &&
+        b[3] === 3 && b[4] === 2 && b[5] === 3 && b[6] === 3 &&
+        b[7] === (11013 & 0xff) && b[8] === (11013 >> 8)
+      );
+      expect(hasReviveAction).toBe(true);
+    });
+
+    it("autoReviveAlly: nếu nhân vật chưa học skill 11013, tự động vô hiệu hóa và báo lỗi", () => {
+      const { s, games } = setup();
+      (s as any).playerSkills = [
+        { id: 10001, name: "Mưa Đá", desc: "", level: 1, sp: 9 },
+      ];
+
+      // Cố gắng bật autoReviveAlly
+      s.encodeAction("set_auto_heal", [JSON.stringify({ autoReviveAlly: true })]);
+
+      // Phải báo lỗi ra game log
+      expect(games.some((g) => g.includes("Ní chưa lĩnh hội thần thông hồi sinh rồi"))).toBe(true);
+      // Cờ autoReviveAlly phải bị disable
+      expect((s as any).autoHeal.autoReviveAlly).toBe(false);
     });
   });
 });

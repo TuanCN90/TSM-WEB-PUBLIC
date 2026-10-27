@@ -215,4 +215,38 @@ describe("ItemListStore", () => {
     expect(reloaded.hasCombinedToday("tuancn11", "2026-10-27")).toBe(true);
     expect(reloaded.hasCombinedToday("tuancn12", "2026-10-27")).toBe(false);
   });
+
+  it("supports safeSpotOnFaint in setAutoHeal with multi-account isolation", () => {
+    const store = new ItemListStoreClass();
+
+    // tuancn11 bật safeSpotOnFaint
+    store.setAutoHeal("tuancn11@server1", { safeSpotOnFaint: true });
+    expect(store.get("tuancn11").autoHeal?.safeSpotOnFaint).toBe(true);
+    expect(store.get("tuancn11@another_server").autoHeal?.safeSpotOnFaint).toBe(true);
+
+    // tuancn12 mặc định không bật (phân lập tuyệt đối)
+    expect(store.get("tuancn12").autoHeal?.safeSpotOnFaint).toBe(false);
+
+    // Reload từ ổ đĩa
+    const reloaded = new ItemListStoreClass();
+    expect(reloaded.get("tuancn11").autoHeal?.safeSpotOnFaint).toBe(true);
+    expect(reloaded.get("tuancn12").autoHeal?.safeSpotOnFaint).toBe(false);
+  });
+
+  it("supports autoReviveAlly in setAutoHeal with multi-account isolation", () => {
+    const store = new ItemListStoreClass();
+
+    // tuancn11 bật autoReviveAlly
+    store.setAutoHeal("tuancn11@server1", { autoReviveAlly: true });
+    expect(store.get("tuancn11").autoHeal?.autoReviveAlly).toBe(true);
+    expect(store.get("tuancn11@another_server").autoHeal?.autoReviveAlly).toBe(true);
+
+    // tuancn12 mặc định không bật (phân lập tuyệt đối)
+    expect(store.get("tuancn12").autoHeal?.autoReviveAlly).toBe(false);
+
+    // Reload từ ổ đĩa
+    const reloaded = new ItemListStoreClass();
+    expect(reloaded.get("tuancn11").autoHeal?.autoReviveAlly).toBe(true);
+    expect(reloaded.get("tuancn12").autoHeal?.autoReviveAlly).toBe(false);
+  });
 });
