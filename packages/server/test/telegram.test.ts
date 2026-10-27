@@ -68,6 +68,20 @@ describe("TelegramService - Giám sát Online qua Telegram", () => {
     expect(body.parse_mode).toBe("HTML");
   });
 
+  it("hỗ trợ custom apiRoot (Reverse Proxy)", async () => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    await service.send("<b>Test Proxy</b>", {
+      apiRoot: "https://my-proxy.workers.dev",
+    });
+
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://my-proxy.workers.dev/bot123456:ABC-DEF/sendMessage");
+  });
+
   it("xử lý phản hồi lỗi từ Telegram API (sai token/chat id)", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: false,

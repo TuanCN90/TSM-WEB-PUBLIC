@@ -54,10 +54,12 @@ export class TelegramService {
   }
 
   /** Gửi trực tiếp 1 tin nhắn định dạng HTML tới Telegram Bot API. */
-  async send(text: string, override?: { botToken?: string; chatId?: string }): Promise<TelegramTestResult> {
+  async send(text: string, override?: { botToken?: string; chatId?: string; apiRoot?: string }): Promise<TelegramTestResult> {
     const cfg = this.getConfig();
     const botToken = (override?.botToken ?? cfg?.botToken ?? "").trim();
     const chatId = (override?.chatId ?? cfg?.chatId ?? "").trim();
+    const rawRoot = (override?.apiRoot ?? cfg?.apiRoot ?? "https://api.telegram.org").trim();
+    const apiRoot = (rawRoot || "https://api.telegram.org").replace(/\/+$/, "");
 
     if (!botToken) {
       return { ok: false, message: "Chưa cấu hình Telegram Bot Token (lấy từ @BotFather)" };
@@ -66,7 +68,7 @@ export class TelegramService {
       return { ok: false, message: "Chưa cấu hình Telegram Chat ID hoặc Group ID" };
     }
 
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const url = `${apiRoot}/bot${botToken}/sendMessage`;
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -95,7 +97,7 @@ export class TelegramService {
   }
 
   /** Gửi tin nhắn thử nghiệm để kiểm tra Bot Token và Chat ID. */
-  async test(override?: { botToken?: string; chatId?: string }): Promise<TelegramTestResult> {
+  async test(override?: { botToken?: string; chatId?: string; apiRoot?: string }): Promise<TelegramTestResult> {
     const text = [
       "🤖 <b>[TS-BOT] KIỂM TRA KẾT NỐI THÀNH CÔNG</b>",
       "━━━━━━━━━━━━━━━━━━━━",

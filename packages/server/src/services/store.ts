@@ -108,6 +108,7 @@ export const DEFAULT_TELEGRAM_CONFIG: TelegramConfig = {
   enabled: false,
   botToken: "",
   chatId: "",
+  apiRoot: "https://api.telegram.org",
   notifyOnDisconnect: true,
   notifyOnReconnect: false,
 };
@@ -137,6 +138,7 @@ export class SettingsStore {
       enabled: Boolean(patch.telegram.enabled),
       botToken: String(patch.telegram.botToken ?? cur.telegram?.botToken ?? "").trim(),
       chatId: String(patch.telegram.chatId ?? cur.telegram?.chatId ?? "").trim(),
+      apiRoot: String(patch.telegram.apiRoot ?? cur.telegram?.apiRoot ?? "https://api.telegram.org").trim(),
       notifyOnDisconnect: patch.telegram.notifyOnDisconnect !== undefined ? Boolean(patch.telegram.notifyOnDisconnect) : (cur.telegram?.notifyOnDisconnect ?? true),
       notifyOnReconnect: patch.telegram.notifyOnReconnect !== undefined ? Boolean(patch.telegram.notifyOnReconnect) : (cur.telegram?.notifyOnReconnect ?? false),
     } : cur.telegram;

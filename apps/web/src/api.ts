@@ -101,6 +101,6 @@ export const api = {
     req<import("@tsbot/protocol").ChaseConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/chase-config`, config),
   settings: () => req<Settings>("GET", "/api/settings"),
   saveSettings: (s: Partial<Settings>) => req<Settings>("PUT", "/api/settings", s),
-  testTelegram: (data?: { botToken?: string; chatId?: string }) =>
+  testTelegram: (data?: { botToken?: string; chatId?: string; apiRoot?: string }) =>
     req<TelegramTestResult>("POST", "/api/telegram/test", data ?? {}),
 };

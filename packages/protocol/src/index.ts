@@ -43,6 +43,8 @@ export interface TelegramConfig {
   botToken: string;
   /** Chat ID hoặc Group ID nhận thông báo */
   chatId: string;
+  /** Telegram API Root URL (mặc định: https://api.telegram.org, có thể đổi sang Reverse Proxy nếu mạng bị chặn) */
+  apiRoot?: string;
   /** Gửi thông báo khi tài khoản bị ngắt kết nối (disconnect) */
   notifyOnDisconnect: boolean;
   /** Gửi thông báo khi tài khoản kết nối lại thành công (reconnected) */

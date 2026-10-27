@@ -67,7 +67,11 @@ export function SettingsPage() {
     }
     setTestingTg(true);
     try {
-      const res = await api.testTelegram({ botToken: tg.botToken, chatId: tg.chatId });
+      const res = await api.testTelegram({
+        botToken: tg.botToken,
+        chatId: tg.chatId,
+        apiRoot: tg.apiRoot || undefined,
+      });
       if (res.ok) {
         toast("ok", "✓ Gửi tin nhắn Telegram thành công! Hãy kiểm tra bot/nhóm chat Telegram.");
       } else {
@@ -290,6 +294,14 @@ export function SettingsPage() {
               placeholder="VD: -1001987654321 hoặc 123456789"
               value={s.telegram?.chatId ?? ""}
               onChange={(e) => updateTg({ chatId: e.target.value })}
+            />
+          </Field>
+
+          <Field label="API Endpoint / Reverse Proxy" hint="Mặc định: https://api.telegram.org (Nếu máy công ty/nhà mạng chặn, dán link Cloudflare Worker Proxy)">
+            <input
+              placeholder="https://api.telegram.org"
+              value={s.telegram?.apiRoot ?? ""}
+              onChange={(e) => updateTg({ apiRoot: e.target.value })}
             />
           </Field>
 
