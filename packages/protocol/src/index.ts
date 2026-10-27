@@ -36,6 +36,24 @@ export interface Account {
   defaultScript?: string;
 }
 
+export interface TelegramConfig {
+  /** Bật/tắt gửi thông báo tới Telegram */
+  enabled: boolean;
+  /** Telegram Bot Token nhận từ @BotFather */
+  botToken: string;
+  /** Chat ID hoặc Group ID nhận thông báo */
+  chatId: string;
+  /** Gửi thông báo khi tài khoản bị ngắt kết nối (disconnect) */
+  notifyOnDisconnect: boolean;
+  /** Gửi thông báo khi tài khoản kết nối lại thành công (reconnected) */
+  notifyOnReconnect?: boolean;
+}
+
+export interface TelegramTestResult {
+  ok: boolean;
+  message?: string;
+}
+
 export interface Settings {
   /** Giới hạn số kết nối (nhân vật online) song song. */
   maxSessions: number;
@@ -51,6 +69,8 @@ export interface Settings {
   socketCodec: string;
   /** Tự động điểm danh ngày ngay sau mỗi lần đăng nhập thành công (mặc định bật). */
   autoCheckin: boolean;
+  /** Cấu hình thông báo giám sát qua Telegram Bot */
+  telegram?: TelegramConfig;
 }
 
 /* ---------- Kết nối (stateful) ---------- */

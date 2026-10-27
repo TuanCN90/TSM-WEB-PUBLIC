@@ -21,6 +21,7 @@ export function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [h, setH] = useState<HealthInfo | null>(null);
+  const [testingTg, setTestingTg] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newServer, setNewServer] = useState("");
@@ -41,6 +42,42 @@ export function SettingsPage() {
   const dirty = JSON.stringify(s) !== JSON.stringify(saved);
   const save = async () => {
     try { const v = await api.saveSettings(s); setS(v); setSaved(v); toast("ok", "Đã lưu cài đặt"); } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+  };
+
+  const updateTg = (patch: Partial<NonNullable<Settings["telegram"]>>) => {
+    const curTg = s.telegram ?? {
+      enabled: false,
+      botToken: "",
+      chatId: "",
+      notifyOnDisconnect: true,
+      notifyOnReconnect: false,
+    };
+    setS({ ...s, telegram: { ...curTg, ...patch } });
+  };
+
+  const handleTestTelegram = async () => {
+    const tg = s.telegram;
+    if (!tg?.botToken?.trim()) {
+      toast("error", "Vui lòng nhập Telegram Bot Token trước khi kiểm tra");
+      return;
+    }
+    if (!tg?.chatId?.trim()) {
+      toast("error", "Vui lòng nhập Chat ID hoặc Group ID");
+      return;
+    }
+    setTestingTg(true);
+    try {
+      const res = await api.testTelegram({ botToken: tg.botToken, chatId: tg.chatId });
+      if (res.ok) {
+        toast("ok", "✓ Gửi tin nhắn Telegram thành công! Hãy kiểm tra bot/nhóm chat Telegram.");
+      } else {
+        toast("error", `✕ ${res.message || "Gửi thất bại"}`);
+      }
+    } catch (err) {
+      toast("error", `✕ ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setTestingTg(false);
+    }
   };
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -220,6 +257,77 @@ export function SettingsPage() {
             <input type="checkbox" className="cbx" checked={s.autoCheckin} onChange={(e) => set("autoCheckin", e.target.checked)} />
             <span className="sl">Tự động điểm danh ngày sau mỗi lần đăng nhập thành công</span>
           </label>
+        </div>
+      </section>
+
+      <section className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>📱 Giám sát Telegram (Monitor Online)</h2>
+          <span className="muted small">Tự động push thông báo tới nhóm Telegram khi có tài khoản bị ngắt kết nối</span>
+        </div>
+        <div className="sgrid">
+          <label className="sfield switch">
+            <input
+              type="checkbox"
+              className="cbx"
+              checked={s.telegram?.enabled ?? false}
+              onChange={(e) => updateTg({ enabled: e.target.checked })}
+            />
+            <span className="sl"><b>Bật giám sát và gửi cảnh báo qua Telegram</b></span>
+          </label>
+
+          <Field label="Telegram Bot Token" hint="Nhận từ @BotFather trên Telegram (VD: 123456789:ABCdef...)">
+            <input
+              type="password"
+              placeholder="VD: 7123456789:AAHk..."
+              value={s.telegram?.botToken ?? ""}
+              onChange={(e) => updateTg({ botToken: e.target.value })}
+            />
+          </Field>
+
+          <Field label="Chat ID / Group ID" hint="ID nhóm hoặc cá nhân nhận tin (nhóm bắt đầu bằng dấu trừ '-', VD: -100123456789)">
+            <input
+              placeholder="VD: -1001987654321 hoặc 123456789"
+              value={s.telegram?.chatId ?? ""}
+              onChange={(e) => updateTg({ chatId: e.target.value })}
+            />
+          </Field>
+
+          <label className="sfield switch">
+            <input
+              type="checkbox"
+              className="cbx"
+              checked={s.telegram?.notifyOnDisconnect ?? true}
+              disabled={!(s.telegram?.enabled ?? false)}
+              onChange={(e) => updateTg({ notifyOnDisconnect: e.target.checked })}
+            />
+            <span className="sl">🚨 Thông báo khẩn khi có tài khoản bị ngắt kết nối (Disconnect / Kick / Rớt mạng)</span>
+          </label>
+
+          <label className="sfield switch">
+            <input
+              type="checkbox"
+              className="cbx"
+              checked={s.telegram?.notifyOnReconnect ?? false}
+              disabled={!(s.telegram?.enabled ?? false)}
+              onChange={(e) => updateTg({ notifyOnReconnect: e.target.checked })}
+            />
+            <span className="sl">✅ Thông báo khi tài khoản kết nối lại thành công</span>
+          </label>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={handleTestTelegram}
+              disabled={testingTg || !s.telegram?.botToken || !s.telegram?.chatId}
+              style={{ padding: "6px 14px", fontSize: 13 }}
+            >
+              {testingTg ? "⏳ Đang gửi thử nghiệm..." : "🔔 Gửi tin nhắn thử nghiệm (Test Bot)"}
+            </button>
+            <span className="muted small">
+              💡 Mẹo: Tạo bot bằng @BotFather, thêm bot vào nhóm chat và cấp quyền gửi tin; lấy Chat ID từ @userinfobot hoặc @getmyid_bot.
+            </span>
+          </div>
         </div>
       </section>
 

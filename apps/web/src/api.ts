@@ -1,4 +1,4 @@
-import type { Account, ActionParams, ActionResult, BattleConfig, ConnectionInfo, Diagnostic, HealthInfo, ItemListKey, ItemLists, LiveActionDef, LogEntry, LoginBody, ScriptFile, ScriptMeta, SessionLoginResult, Settings } from "@tsbot/protocol";
+import type { Account, ActionParams, ActionResult, BattleConfig, ConnectionInfo, Diagnostic, HealthInfo, ItemListKey, ItemLists, LiveActionDef, LogEntry, LoginBody, ScriptFile, ScriptMeta, SessionLoginResult, Settings, TelegramTestResult } from "@tsbot/protocol";
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -101,4 +101,6 @@ export const api = {
     req<import("@tsbot/protocol").ChaseConfig>("PUT", `/api/accounts/${encodeURIComponent(accountId)}/chase-config`, config),
   settings: () => req<Settings>("GET", "/api/settings"),
   saveSettings: (s: Partial<Settings>) => req<Settings>("PUT", "/api/settings", s),
+  testTelegram: (data?: { botToken?: string; chatId?: string }) =>
+    req<TelegramTestResult>("POST", "/api/telegram/test", data ?? {}),
 };

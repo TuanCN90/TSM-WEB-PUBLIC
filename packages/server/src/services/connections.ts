@@ -5,6 +5,7 @@ import { DungeonTeamService } from "./dungeonTeam";
 import { WorldBossService } from "./worldBoss";
 import { EscortService } from "./escort";
 import { PartyService, WARP_ACTIONS } from "./party";
+import { TelegramService } from "./telegram";
 import { CUSTOM_PREFIX, ClosedStore, DailyChecklistStore, DungeonSoloConfigStore, DungeonTeamConfigStore, EscortConfigStore, PartyConfigStore, WorldBossConfigStore, type AccountStore, type BattleConfigStore, type ItemListStore, type RunnableRegistry, type ScriptStore, type ServerStore, type SettingsStore } from "./store";
 
 export class HttpError extends Error {
@@ -65,6 +66,8 @@ export class ConnectionManager {
     this.escortConfigs,
     this.dailyChecklist,
   );
+  /** Giám sát cảnh báo trạng thái Online qua Telegram Bot */
+  readonly telegram: TelegramService;
 
   constructor(
     private scripts: ScriptStore,
@@ -76,7 +79,9 @@ export class ConnectionManager {
     private battleConfigs?: BattleConfigStore,
     private itemLists?: ItemListStore,
     private chaseConfigs?: import("./store").ChaseConfigStore,
-  ) {}
+  ) {
+    this.telegram = new TelegramService(this.settings);
+  }
 
   list(): ConnectionInfo[] {
     return [...this.conns.values()].map((c) => c.info());
@@ -193,11 +198,33 @@ export class ConnectionManager {
         onOnline: (reconnected) => {
           if (reconnected) {
             c?.log("info", "🔄 [Tự động khôi phục] Đồng bộ lại cấu hình trận đấu, vật phẩm và tổ đội sau khi kết nối lại...", "game");
+            const acc = this.accounts.get(accountId);
+            void this.telegram.notifyReconnect({
+              accountId,
+              username: acc?.username,
+              server: acc?.server,
+              characterName: c?.character()?.player?.name,
+              mapId: c?.character()?.location?.map,
+            });
             void this.applyAccountConfigs(accountId, c!).then(() => {
               this.party.refresh(accountId);
               this.dungeonTeam.refresh(accountId);
             }).catch(() => {});
           }
+        },
+        onDrop: (reason, details) => {
+          const acc = this.accounts.get(accountId);
+          const currentCfg = this.settings.get();
+          const willReconnect = currentCfg.autoReconnect && currentCfg.maxReconnect > 0;
+          void this.telegram.notifyDisconnect({
+            accountId,
+            username: acc?.username,
+            server: acc?.server,
+            characterName: details?.characterName || c?.character()?.player?.name,
+            mapId: details?.mapId || c?.character()?.location?.map,
+            reason,
+            willReconnect,
+          });
         },
       });
       this.conns.set(accountId, c);

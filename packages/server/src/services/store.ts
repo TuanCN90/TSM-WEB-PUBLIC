@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DAILY_CHECKLIST_CATALOG, getTaiwanDateKey, ITEM_LIST_KEYS } from "@tsbot/protocol";
-import type { Account, AutoHealConfig, AutoHealTargetConfig, BattleConfig, BuySettings, ChaseConfig, DailyChecklistState, DungeonSoloConfig, DungeonTeamConfig, EscortConfig, ItemListKey, PartyConfig, ItemLists, ScriptFile, ScriptMeta, Settings, WorldBossConfig } from "@tsbot/protocol";
+import type { Account, AutoHealConfig, AutoHealTargetConfig, BattleConfig, BuySettings, ChaseConfig, DailyChecklistState, DungeonSoloConfig, DungeonTeamConfig, EscortConfig, ItemListKey, PartyConfig, ItemLists, ScriptFile, ScriptMeta, Settings, TelegramConfig, WorldBossConfig } from "@tsbot/protocol";
 import { DATA_DIR, SCRIPTS_DIR } from "./paths";
 
 /* ---------- Script store: file .ini nguyên bản, 2 chiều với tool cũ ---------- */
@@ -104,6 +104,14 @@ class JsonFile<T> {
   }
 }
 
+export const DEFAULT_TELEGRAM_CONFIG: TelegramConfig = {
+  enabled: false,
+  botToken: "",
+  chatId: "",
+  notifyOnDisconnect: true,
+  notifyOnReconnect: false,
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   maxSessions: 15,
   defaultTransport: "mock",
@@ -115,6 +123,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxReconnect: 5,
   socketCodec: "raw-tcp",
   autoCheckin: true,
+  telegram: DEFAULT_TELEGRAM_CONFIG,
 };
 
 export class SettingsStore {
@@ -124,6 +133,14 @@ export class SettingsStore {
   }
   update(patch: Partial<Settings>): Settings {
     const cur = this.get();
+    const nextTelegram: TelegramConfig | undefined = patch.telegram !== undefined ? {
+      enabled: Boolean(patch.telegram.enabled),
+      botToken: String(patch.telegram.botToken ?? cur.telegram?.botToken ?? "").trim(),
+      chatId: String(patch.telegram.chatId ?? cur.telegram?.chatId ?? "").trim(),
+      notifyOnDisconnect: patch.telegram.notifyOnDisconnect !== undefined ? Boolean(patch.telegram.notifyOnDisconnect) : (cur.telegram?.notifyOnDisconnect ?? true),
+      notifyOnReconnect: patch.telegram.notifyOnReconnect !== undefined ? Boolean(patch.telegram.notifyOnReconnect) : (cur.telegram?.notifyOnReconnect ?? false),
+    } : cur.telegram;
+
     const next: Settings = {
       maxSessions: clamp(patch.maxSessions ?? cur.maxSessions, 1, 15),
       defaultTransport: patch.defaultTransport ?? cur.defaultTransport,
@@ -135,6 +152,7 @@ export class SettingsStore {
       maxReconnect: clamp(patch.maxReconnect ?? cur.maxReconnect, 0, 100),
       socketCodec: patch.socketCodec ?? cur.socketCodec,
       autoCheckin: patch.autoCheckin ?? cur.autoCheckin,
+      telegram: nextTelegram,
     };
     this.f.write(next);
     return next;

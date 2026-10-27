@@ -19,6 +19,8 @@ export interface ConnectionOptions {
   onClosed?: (ts: number) => void;
   /** Gọi khi kết nối online (hoặc reconnect thành công). */
   onOnline?: (reconnected: boolean) => void;
+  /** Gọi khi mất kết nối bất ngờ (disconnect). */
+  onDrop?: (reason: string, details?: { characterName?: string; mapId?: number }) => void;
 }
 
 export interface LoginParams {
@@ -248,11 +250,14 @@ export class GameConnection {
   /** Mất kết nối ngoài ý muốn → huỷ script, thử reconnect nếu bật. */
   private handleDrop(reason: string) {
     if (this.state !== "online") return;
+    const ch = this.transport?.getState();
+    const charDetails = ch ? { characterName: ch.player?.name, mapId: ch.location?.map } : undefined;
     this.markClosed();
     this.log("warn", `Mất kết nối: ${reason}`);
     this.evt(MSG.dropped(reason), "warn");
     this.abortScript("Mất kết nối giữa chừng");
     this.cleanupTransport();
+    this.o.onDrop?.(reason, charDetails);
     const p = this.params!;
     if (!p.autoReconnect || p.maxReconnect < 1) {
       this.error = reason;

@@ -463,6 +463,24 @@ const FEATURES: Feature[] = [
     logic: ["Tab Sự kiện hiển thị log có tô màu theo loại (sát thương, kỹ năng, hệ thống…).", "Đồng hồ theo giờ server Đài Loan để canh sự kiện."],
     rules: ["Log chỉ giữ một lượng gần nhất để giao diện luôn mượt."],
   },
+  {
+    id: "telegram_monitor",
+    icon: "📡",
+    name: "Giám sát Online qua Telegram",
+    tone: "violet",
+    summary: "Tự động phát hiện và gửi cảnh báo khẩn cấp tới nhóm/bot Telegram ngay khi có bất kỳ tài khoản nào bị ngắt kết nối (disconnect/kick/rớt mạng).",
+    logic: [
+      "Hệ thống giám sát trạng thái kết nối socket của toàn bộ tài khoản theo thời gian thực.",
+      "Khi phát hiện phiên bị ngắt kết nối đột ngột (server đóng kết nối, kick mã 42, lỗi đường truyền hoặc timeout), bot lập tức gửi thông báo chi tiết vào nhóm Telegram bao gồm: tên tài khoản, tên nhân vật, bản đồ, thời gian chính xác, lý do ngắt kết nối và cờ trạng thái tự vào lại.",
+      "Hỗ trợ gửi thông báo cập nhật khi tài khoản kết nối lại thành công (reconnected).",
+      "Cung cấp nút 'Gửi tin nhắn thử nghiệm' ngay trong Cài đặt để xác thực Bot Token và Chat ID hoạt động trước khi lưu.",
+    ],
+    rules: [
+      "Cấu hình tập trung tại tab Cài đặt: chỉ cần thiết lập 1 lần Bot Token và Chat ID để giám sát cho tất cả các tài khoản.",
+      "Tích hợp cơ chế chống spam (anti-flood): tự động giãn cách tối thiểu 10 giây giữa các lần gửi cảnh báo của cùng 1 tài khoản, tránh làm nghẽn nhóm chat khi tài khoản liên tục thử vào lại.",
+      "Thông báo định dạng HTML rõ ràng, tự động mã hóa ký tự đặc biệt để đảm bảo luôn gửi tin thành công qua Telegram API.",
+    ],
+  },
 ];
 
 type TabKey = "console" | "scripts" | "train" | "settings";
@@ -488,6 +506,12 @@ const TREE: { tab: TabKey; icon: string; name: string; subs: { icon: string; nam
     ],
   },
   { tab: "train", icon: "🎯", name: "Bãi Train", subs: [{ icon: "🎯", name: "Bãi train & Truy kích", ids: ["train"] }] },
+  {
+    tab: "settings", icon: "⚙️", name: "Cài đặt",
+    subs: [
+      { icon: "📱", name: "Giám sát & Cấu hình Hệ thống", ids: ["telegram_monitor"] },
+    ],
+  },
 ];
 
 function FeatureModal({ f, path, onGo, onClose }: { f: Feature; path: string; onGo: () => void; onClose: () => void }) {

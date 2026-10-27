@@ -521,6 +521,7 @@ app.get<{ Params: { accountId: string }; Querystring: { after?: string } }>("/ap
 // Settings
 app.get("/api/settings", async () => settings.get());
 app.put<{ Body: Partial<Settings> }>("/api/settings", async (req) => settings.update(req.body ?? {}));
+app.post<{ Body: { botToken?: string; chatId?: string } }>("/api/telegram/test", async (req) => connections.telegram.test(req.body ?? {}));
 
 /* ---------- Static (production) ---------- */
 const dist = join(ROOT, "apps/web/dist");
