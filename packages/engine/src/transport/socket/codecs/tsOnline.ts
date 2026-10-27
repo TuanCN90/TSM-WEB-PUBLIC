@@ -930,11 +930,13 @@ class TsOnlineSession implements CodecSession {
     for (const cb of this.mapWaiters) {
       try { cb(this.location.map); } catch {}
     }
-    if (this.chaseConfig.enabled && this.location.map === this.chaseConfig.mapId) {
-      this.scheduleChaseCheck(1200);
-    }
-    if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
-      this.scheduleAutoMove(1200);
+    if (!this.isMemberInParty() && this.partyTargetConfig.role !== "member") {
+      if (this.chaseConfig.enabled && this.location.map === this.chaseConfig.mapId) {
+        this.scheduleChaseCheck(1200);
+      }
+      if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
+        this.scheduleAutoMove(1200);
+      }
     }
 
     // Xin danh sách kênh của map mới hoặc sau khi đổi kênh (như client thật)
@@ -4822,6 +4824,11 @@ class TsOnlineSession implements CodecSession {
       clearTimeout(this.autoMoveTimer);
       this.autoMoveTimer = undefined;
     }
+    if (this.sweepTimer) {
+      clearTimeout(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
+    this.sweepingBag = false;
     this.battleUnits = [];
     this.battleTurnIndex = 0;
     this.battleConfig = { ...this.battleConfig, currentTurn: 0 };
