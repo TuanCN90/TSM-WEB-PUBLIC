@@ -1652,6 +1652,90 @@ describe("Tính năng 'Đến Chỗ An Toàn' (move_to_safe_spot)", () => {
       // Cờ autoReviveAlly phải bị disable
       expect((s as any).autoHeal.autoReviveAlly).toBe(false);
     });
+
+    it("resolveTarget & battleTurn: đòn cận chiến (Đấu vật 10000) BẮT BUỘC đánh quái hàng trước (row 1), tránh kick mã 42", () => {
+      const { s, sent } = setup();
+      (s as any).player.sp = { cur: 0, max: 100 }; // Hết SP -> fallback Đấu Vật 10000
+      s.encodeAction("set_battle_config", [JSON.stringify({
+        autoFight: true,
+        playerAction: { type: "attack", skillId: 12003, target: "F1" }, // Cấu hình ban đầu là Hỏa Tiễn
+      })]);
+
+      // Vào trận đấu 14/0c
+      s.onData(frame(0x14, 0x0c, "00"));
+
+      // Tạo quái ở cả hàng sau (row 0, col 2) và hàng trước (row 1, col 2)
+      (s as any).battleUnits = [
+        { row: 3, col: 2, name: "Nhân vật", level: 100, hp: { cur: 1000, max: 1000 }, sp: { cur: 0, max: 100 }, isEnemy: false, isPet: false },
+        { row: 0, col: 2, name: "Quái Hàng Sau", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+        { row: 1, col: 2, name: "Quái Hàng Trước", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+      ];
+
+      sent.length = 0;
+      // Đến lượt đánh 34/01
+      s.onData(frame(0x34, 0x01, "00"));
+
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      // Lệnh 32/01 được gửi phải nhắm vào mục tiêu row = 1 (hàng trước), tuyệt đối không được nhắm vào row = 0
+      const attackAction = dec.find((b) => b[0] === 0x32 && b[1] === 0x01);
+      expect(attackAction).toBeDefined();
+      expect(attackAction![3]).toBe(3); // actorRow
+      expect(attackAction![4]).toBe(2); // actorCol
+      expect(attackAction![5]).toBe(1); // targetRow: BẮT BUỘC LÀ 1 (hàng trước), không được là 0
+      expect(attackAction![6]).toBe(2); // targetCol: cột 2 cùng cột với actor
+      expect(attackAction![7] | (attackAction![8] << 8)).toBe(10000); // Đấu vật
+    });
+
+    it("thành viên hết SP: đánh đúng quái hàng 1 và dùng đúng cột của thành viên, không chạm vào cột 2 của chủ PT", () => {
+      const { s, sent } = setup();
+      (s as any).uid = Buffer.from("1122334455667788", "hex");
+      (s as any).player = { name: "Thành Viên 1", level: 100, hp: { cur: 1000, max: 1000 }, sp: { cur: 0, max: 100 } };
+
+      // Cấu hình là thành viên trong đội
+      (s as any).partyTargetConfig = { role: "member", leaderName: "Chủ Đội", members: [], escapeIfNotFullParty: false };
+
+      // Vào đội
+      s.onData(frame(0x0d, 0x05, "00a1b2c3d4e5f607081122334455667788"));
+
+      s.encodeAction("set_battle_config", [JSON.stringify({
+        autoFight: true,
+        playerAction: { type: "attack", skillId: 10000, target: "F1" },
+      })]);
+
+      // Vào trận đấu 14/0c
+      s.onData(frame(0x14, 0x0c, "00"));
+
+      // Thành viên ở ô (3, 0), chủ PT ở (3, 2), quái ở hàng trước (1, 0) và (1, 2)
+      (s as any).battleUnits = [
+        { row: 3, col: 2, name: "Chủ Đội", level: 120, hp: { cur: 2000, max: 2000 }, sp: { cur: 100, max: 100 }, isEnemy: false, isPet: false, owner: "a1b2c3d4e5f60708" },
+        { row: 3, col: 0, name: "Thành Viên 1", level: 100, hp: { cur: 1000, max: 1000 }, sp: { cur: 0, max: 100 }, isEnemy: false, isPet: false, owner: "1122334455667788" },
+        { row: 1, col: 2, name: "Quái Hàng Trước 2", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+        { row: 1, col: 0, name: "Quái Hàng Trước 0", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+        { row: 0, col: 0, name: "Quái Hàng Sau 0", level: 90, hp: { cur: 2000, max: 2000 }, sp: { cur: 50, max: 50 }, isEnemy: true },
+      ];
+
+      sent.length = 0;
+      // Đến lượt đánh 34/01
+      s.onData(frame(0x34, 0x01, "00"));
+
+      const dec = sent.map((hex) => {
+        const u = Buffer.from(hex, "hex");
+        for (let i = 2; i < u.length; i++) u[i] ^= 0xad;
+        return u.subarray(6);
+      });
+
+      const attackAction = dec.find((b) => b[0] === 0x32 && b[1] === 0x01);
+      expect(attackAction).toBeDefined();
+      expect(attackAction![3]).toBe(3); // actorRow = 3
+      expect(attackAction![4]).toBe(0); // actorCol = 0 (cột của thành viên, TUYỆT ĐỐI không phải 2)
+      expect(attackAction![5]).toBe(1); // targetRow = 1 (hàng trước đối diện)
+      expect([0, 2]).toContain(attackAction![6]); // targetCol: quái ở hàng trước
+    });
   });
 });
 

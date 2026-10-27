@@ -3152,6 +3152,7 @@ class TsOnlineSession implements CodecSession {
 
   /** Kiểm tra tài khoản hiện tại có đang là THÀNH VIÊN trong tổ đội (không phải chủ PT) hay không. */
   private isMemberInParty(): boolean {
+    if (this.partyTargetConfig.role === "member") return true;
     const uid = this.selfHex || (this.uid?.toString("hex") ?? "");
     const snap = this.party.snapshot(uid);
     if (snap.joined) {
@@ -5101,14 +5102,35 @@ class TsOnlineSession implements CodecSession {
            name.includes("thanh long") || name.includes("gia huệ");
   }
 
-  private resolveTarget(targetSetting: string | undefined, isSupportOrBuff: boolean): { row: number; col: number; label: string } {
+  private resolveTarget(
+    targetSetting: string | undefined,
+    isSupportOrBuff: boolean,
+    isMelee = false,
+    actorCol = 2
+  ): { row: number; col: number; label: string } {
     const rawTarget = (targetSetting || "F1").trim();
 
     // 1. Kiểm tra toạ độ cụ thể dạng (row, col) ví dụ "(3,2)", "(2,2)" hoặc "3,2"
     const coordMatch = rawTarget.match(/^\(?\s*([0-3])\s*,\s*([0-4])\s*\)?$/);
     if (coordMatch) {
-      const r = Number(coordMatch[1]);
-      const c = Number(coordMatch[2]);
+      let r = Number(coordMatch[1]);
+      let c = Number(coordMatch[2]);
+      // Bảo vệ đòn cận chiến (Melee / Đấu vật 10000):
+      // Nếu cấu hình target vào hàng sau (row 0) mà hàng trước (row 1) còn quái sống:
+      // BẮT BUỘC chuyển mục tiêu sang hàng 1 để không bị server kick mã 42
+      if (isMelee && r === 0) {
+        const frontSameCol = this.battleUnits.find((u) => u.isEnemy && u.hp.cur > 0 && u.row === 1 && u.col === c);
+        if (frontSameCol) {
+          r = 1;
+        } else {
+          const anyFront = this.battleUnits.filter((u) => u.isEnemy && u.hp.cur > 0 && u.row === 1);
+          if (anyFront.length > 0) {
+            const nearest = [...anyFront].sort((a, b) => Math.abs(a.col - c) - Math.abs(b.col - c))[0]!;
+            r = 1;
+            c = nearest.col;
+          }
+        }
+      }
       const unit = this.battleUnits.find((u) => u.row === r && u.col === c);
       return {
         row: r,
@@ -5125,6 +5147,21 @@ class TsOnlineSession implements CodecSession {
       else if (slotNum >= 6 && slotNum <= 10) { r = 0; c = slotNum - 6; }
       else if (slotNum >= 11 && slotNum <= 15) { r = 2; c = slotNum - 11; }
       else { r = 3; c = slotNum - 16; }
+
+      // Tương tự bảo vệ slot 6..10 (hàng 0) khi dùng đòn cận chiến
+      if (isMelee && r === 0) {
+        const frontSameCol = this.battleUnits.find((u) => u.isEnemy && u.hp.cur > 0 && u.row === 1 && u.col === c);
+        if (frontSameCol) {
+          r = 1;
+        } else {
+          const anyFront = this.battleUnits.filter((u) => u.isEnemy && u.hp.cur > 0 && u.row === 1);
+          if (anyFront.length > 0) {
+            const nearest = [...anyFront].sort((a, b) => Math.abs(a.col - c) - Math.abs(b.col - c))[0]!;
+            r = 1;
+            c = nearest.col;
+          }
+        }
+      }
 
       const unitAtSlot = this.battleUnits.find((u) => u.row === r && u.col === c);
       return {
@@ -5146,10 +5183,14 @@ class TsOnlineSession implements CodecSession {
     }
 
     // 4. F1 Tấn công: quái còn sống
+    // CHÚ THÍCH LƯỚI CHIẾN TS ONLINE:
+    // row 1: HÀNG TRƯỚC của địch (Front row, giáp với hàng 2 của võ tướng mình)
+    // row 0: HÀNG SAU của địch (Back row, xa nhất)
     const livingEnemies = this.battleUnits.filter((u) => u.isEnemy && u.hp.cur > 0);
     if (livingEnemies.length > 0) {
-      // Ưu tiên hàng trước (row 0), nếu hàng trước đã dọn sạch thì đánh hàng sau (row 1)
-      const front = livingEnemies.filter((u) => u.row === 0);
+      // Ưu tiên hàng trước (row 1), nếu hàng trước đã dọn sạch thì mới đánh hàng sau (row 0)
+      // Điều này cực kỳ quan trọng đối với đòn Đấu vật 10000 / Cận chiến để tránh bị server kick mã 42
+      const front = livingEnemies.filter((u) => u.row === 1);
       const pool = front.length > 0 ? front : livingEnemies;
 
       // Thuật toán chọn mục tiêu F1 thông minh (Smart AOE / Center Target):
@@ -5181,7 +5222,7 @@ class TsOnlineSession implements CodecSession {
       return { row: chosen.row, col: chosen.col, label: `${chosen.name} (F1)` };
     }
 
-    return { row: 0, col: 2, label: "Quái (0, 2)" };
+    return { row: 1, col: 2, label: "Quái (1, 2)" };
   }
 
   private battleTurn() {
@@ -5206,11 +5247,32 @@ class TsOnlineSession implements CodecSession {
 
     // 1. Tìm chính xác Nhân vật CỦA MÌNH:
     // Ưu tiên 1: uid khớp với selfHex
-    // Ưu tiên 2: tên khớp với this.player.name
-    // Ưu tiên 3: nếu KHÔNG ở trong trận đội, fallback về nhân vật duy nhất hoặc hàng 3.
-    // TUYỆT ĐỐI KHÔNG fallback lấy đơn vị người khác nếu đang ở trong trận đội!
+    // Ưu tiên 2: tên khớp với this.player.name (hỗ trợ normName và strip mã màu)
     let charUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === false && !!self && u.owner === self)
-      ?? this.battleUnits.find((u) => !u.isEnemy && u.isPet === false && !!this.player.name && u.name === this.player.name);
+      ?? this.battleUnits.find((u) => !u.isEnemy && u.isPet === false && !!this.player.name && (u.name === this.player.name || normName(u.name) === normName(this.player.name)));
+
+    const isMemberInParty = (charUnit && charUnit.col !== 2)
+      || (snap.joined && snap.leaderName && normName(snap.leaderName) !== normName(this.player.name))
+      || (this.partyTargetConfig.role === "member" && inTeamBattle);
+
+    // Tính cột dự kiến của thành viên dựa trên thứ tự gia nhập đội ngũ trong snap.members:
+    // TS Online gán slot 1 (chủ PT) = col 2; slot 2 = col 0; slot 3 = col 1; slot 4 = col 3; slot 5 = col 4.
+    const SLOT_TO_COL = [2, 0, 1, 3, 4];
+    let memberExpectedCol: number | undefined;
+    if (isMemberInParty && snap.joined && snap.members.length > 0) {
+      const myIdx = snap.members.findIndex((m) =>
+        m.isSelf
+        || (self && m.uid === self)
+        || (this.player.name && (normName(m.name) === normName(this.player.name) || normName(m.name).includes(normName(this.player.name))))
+      );
+      if (myIdx > 0 && myIdx < SLOT_TO_COL.length) {
+        memberExpectedCol = SLOT_TO_COL[myIdx];
+      }
+    }
+
+    if (!charUnit && memberExpectedCol !== undefined) {
+      charUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === false && u.row === 3 && u.col === memberExpectedCol);
+    }
 
     if (!charUnit && !inTeamBattle) {
       charUnit = this.battleUnits.find((u) => !u.isEnemy && u.isPet === false)
@@ -5218,11 +5280,14 @@ class TsOnlineSession implements CodecSession {
     }
 
     const pRow = charUnit?.row ?? 3;
-    const pCol = charUnit?.col ?? 2;
+    const pCol = charUnit?.col ?? (memberExpectedCol ?? (inTeamBattle && isMemberInParty ? -1 : 2));
 
-    const isMemberInParty = (charUnit && charUnit.col !== 2)
-      || (snap.joined && snap.leaderName && normName(snap.leaderName) !== normName(this.player.name))
-      || (this.partyTargetConfig.role === "member" && inTeamBattle);
+    // Nếu đang trong trận đội với vai trò thành viên mà không xác định được cột hoặc bị chỉ định nhầm vào cột 2 của chủ PT:
+    // TUYỆT ĐỐI KHÔNG gửi lệnh điều khiển ô (3, 2) tránh server kick mã 42 ngay lập tức
+    if (inTeamBattle && isMemberInParty && (pCol === 2 || pCol < 0)) {
+      this.io.log("warn", `[Chiến đấu] ${this.player.name || "Thành viên"} chưa xác định được cột hợp lệ trong đội (pCol=${pCol}) — bỏ qua lượt gửi lệnh để tránh kick mã 42.`);
+      return;
+    }
 
     // 2. Tìm chính xác Võ tướng (Pet) CỦA MÌNH:
     // Với thành viên trong đội (isMemberInParty): Võ tướng BẮT BUỘC nằm ở Hàng 2 và CÙNG CỘT với Master (col = pCol).
@@ -5373,7 +5438,7 @@ class TsOnlineSession implements CodecSession {
           }
           const itemSlot = slot ?? 1;
           const targetPref = pAct.target || "F1";
-          const target = this.resolveTarget(targetPref, true);
+          const target = this.resolveTarget(targetPref, true, false, pCol);
           const itemName = pAct.itemName || (pAct.itemId ? `Item #${pAct.itemId}` : `Ô túi #${itemSlot}`);
           this.io.game(`🧪 [${this.player.name || "Nhân vật"}] dùng [${itemName}] lên [${target.label}] (Hiệp ${effectiveTurn})!`);
           const pBuf = this.encodeBattleActionFrame(pRow, pCol, target.row, target.col, 19001, itemSlot);
@@ -5390,9 +5455,10 @@ class TsOnlineSession implements CodecSession {
 
           const pTargetPref = pAct.target || "F1";
           const pIsSupp = this.isSupportSkill(pSkillId, pTargetPref);
+          const pIsMelee = pSkillId === 10000;
           const pTarget = (pSkillId === 17001 || pSkillId === 18001)
             ? { row: pRow, col: pCol, label: pSkillId === 18001 ? "Bỏ chạy" : "Bản thân" }
-            : this.resolveTarget(pTargetPref, pIsSupp);
+            : this.resolveTarget(pTargetPref, pIsSupp, pIsMelee, pCol);
 
           const pBuf = this.encodeBattleActionFrame(pRow, pCol, pTarget.row, pTarget.col, pSkillId);
           this.io.send(pBuf);
@@ -5417,7 +5483,7 @@ class TsOnlineSession implements CodecSession {
         }
         const itemSlot = slot ?? 1;
         const petTargetPref = petAct.target || "F1";
-        const petTarget = this.resolveTarget(petTargetPref, true);
+        const petTarget = this.resolveTarget(petTargetPref, true, false, petCol);
         const itemName = petAct.itemName || (petAct.itemId ? `Item #${petAct.itemId}` : `Ô túi #${itemSlot}`);
         this.io.game(`🧪 [${this.pet.name || "Võ tướng"}] dùng [${itemName}] lên [${petTarget.label}] (Hiệp ${effectiveTurn})!`);
         const petBuf = this.encodeBattleActionFrame(petRow, petCol, petTarget.row, petTarget.col, 19001, itemSlot);
@@ -5447,9 +5513,10 @@ class TsOnlineSession implements CodecSession {
 
         const petTargetPref = petAct.target || "F1";
         const petIsSupp = this.isSupportSkill(petSkillId, petTargetPref);
+        const petIsMelee = petSkillId === 10000;
         const petTarget = (petSkillId === 17001 || petSkillId === 18001)
           ? { row: petRow, col: petCol, label: petSkillId === 18001 ? "Bỏ chạy" : "Bản thân" }
-          : this.resolveTarget(petTargetPref, petIsSupp);
+          : this.resolveTarget(petTargetPref, petIsSupp, petIsMelee, petCol);
 
         const petBuf = this.encodeBattleActionFrame(petRow, petCol, petTarget.row, petTarget.col, petSkillId);
         this.io.send(petBuf);
@@ -5822,9 +5889,12 @@ class TsOnlineSession implements CodecSession {
         setTimeout(() => {
           this.triggerAutoSweep();
           this.triggerAutoHeal();
-          this.scheduleChaseCheck(700);
-          if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
-            this.scheduleAutoMove(1000);
+          // Thành viên trong tổ đội TUYỆT ĐỐI không tự ý di chuyển hay truy kích quái sau trận
+          if (!this.isMemberInParty() && this.partyTargetConfig.role !== "member") {
+            this.scheduleChaseCheck(700);
+            if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
+              this.scheduleAutoMove(1000);
+            }
           }
         }, 500);
       }
