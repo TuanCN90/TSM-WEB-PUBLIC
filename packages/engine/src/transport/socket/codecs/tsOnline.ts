@@ -1095,8 +1095,8 @@ class TsOnlineSession implements CodecSession {
   private bankOpen = false; // Trạng thái phiên kho Tiền Trang đang mở với NPC
   /** Đội ngũ (opcode 0d/xx) — logic + ghi chú giao thức ở ./party.ts và docs/PARTY_KNOWLEDGE.md. */
   private party = new PartyTracker();
-  /** Cấu hình tự chấp nhận do server đẩy xuống (set_party_config): lời mời từ `inviteFrom`, lời xin từ các tên trong `requestFrom`. */
-  private partyAuto = { inviteFrom: "", requestFrom: [] as string[] };
+  /** Cấu hình tự chấp nhận do server đẩy xuống (set_party_config): lời mời từ `inviteFrom` (hoặc `leaderUid`), lời xin từ các tên trong `requestFrom` (hoặc `requestUids`). */
+  private partyAuto = { inviteFrom: "", requestFrom: [] as string[], leaderUid: "", requestUids: [] as string[] };
   /** Cấu hình mục tiêu tổ đội và bỏ chạy khi chưa đủ đội ngũ (Bậc 2). */
   private partyTargetConfig = {
     role: "leader" as "leader" | "member",
@@ -3127,10 +3127,13 @@ class TsOnlineSession implements CodecSession {
     this.publishParty();
   }
 
-  /** Tự trả lời đồng ý nếu người mời/xin nằm trong danh sách server cấu hình (set_party_config). */
+  /** Tự trả lời đồng ý nếu người mời/xin nằm trong danh sách server cấu hình (set_party_config) theo tên HOẶC theo UID đã biết. */
   private maybeAutoAccept(kind: "invite" | "request", uid: string, name: string) {
     const key = normName(name);
-    const ok = kind === "invite" ? !!key && key === normName(this.partyAuto.inviteFrom) : !!key && this.partyAuto.requestFrom.some((n) => normName(n) === key);
+    const uidLower = String(uid ?? "").trim().toLowerCase();
+    const ok = kind === "invite"
+      ? (!!key && key === normName(this.partyAuto.inviteFrom)) || (!!this.partyAuto.leaderUid && this.partyAuto.leaderUid === uidLower)
+      : (!!key && this.partyAuto.requestFrom.some((n) => normName(n) === key)) || (this.partyAuto.requestUids.includes(uidLower));
     if (!ok) {
       this.io.log("info", `[Đội ngũ] ${kind === "invite" ? "lời mời" : "lời xin"} từ "${name || uid}" không nằm trong danh sách tự chấp nhận — bỏ qua`);
       return;
@@ -3301,7 +3304,14 @@ class TsOnlineSession implements CodecSession {
       case "set_party_config": {
         let req: string[] = [];
         try { const v = JSON.parse(args[1] || "[]"); if (Array.isArray(v)) req = v.map(String); } catch { /* giữ rỗng */ }
-        this.partyAuto = { inviteFrom: (args[0] ?? "").trim(), requestFrom: req.map((n) => n.trim()).filter(Boolean) };
+        let reqUids: string[] = [];
+        try { const u = JSON.parse(args[7] || "[]"); if (Array.isArray(u)) reqUids = u.map(String).map((s) => s.trim().toLowerCase()).filter(Boolean); } catch {}
+        this.partyAuto = {
+          inviteFrom: (args[0] ?? "").trim(),
+          requestFrom: req.map((n) => n.trim()).filter(Boolean),
+          leaderUid: String(args[6] ?? "").trim().toLowerCase(),
+          requestUids: reqUids,
+        };
         let members: string[] = [];
         try { const m = JSON.parse(args[4] || "[]"); if (Array.isArray(m)) members = m.map(String).map((n) => n.trim()).filter(Boolean); } catch {}
         this.partyTargetConfig = {
@@ -3317,18 +3327,26 @@ class TsOnlineSession implements CodecSession {
       case "party_invite":
       case "party_request": {
         const target = String(args[0] ?? "").trim();
-        if (!target) return { ok: false, message: "Thiếu tên nhân vật" };
+        const force = args[1] === "force";
+        const directUid = String(args[2] ?? "").trim();
+        if (!target && !directUid) return { ok: false, message: "Thiếu tên nhân vật hoặc UID" };
         const snap = this.party.snapshot(self);
         if (name === "party_invite") {
           if (snap.joined && !snap.members.find((m) => m.isSelf)?.isLeader) return { ok: false, message: "Chỉ chủ PT mới được mời thêm người" };
           if (snap.members.filter((m) => m.name).length >= 5) return { ok: false, message: "Đội đã đủ 5 người" };
         } else if (snap.joined) return { ok: false, message: "Đang ở trong đội, hãy rời đội trước khi xin vào đội khác" };
-        // force="force": bên điều phối xác nhận 2 tài khoản cùng map ⇒ dùng uid đã biết dù chưa có spawn/0c/00 mới (server tự kiểm tra lại)
-        const p = this.party.findInMap(target, this.location.map, self) ?? (args[1] === "force" ? this.party.findAny(target, self) : undefined);
+
+        let p: { uid: string; name: string; map: number } | undefined;
+        if (directUid) {
+          p = { uid: directUid, name: target, map: this.location.map };
+          this.party.players.set(directUid, { uid: directUid, name: target, map: this.location.map, x: this.location.x, y: this.location.y, seen: Date.now() });
+        } else {
+          p = this.party.findInMap(target, this.location.map, self) ?? (force ? this.party.findAny(target, self) : undefined);
+        }
         if (!p) return { ok: false, message: `Không thấy "${target}" trong map ${this.location.map} (chỉ mời/xin được người cùng map)` };
         if (p.map !== this.location.map) this.io.log("info", `[Đội ngũ] ${p.name}: chưa có gói báo map mới, dùng uid đã biết ${p.uid} (đã xác nhận cùng map ${this.location.map} ở phía điều phối)`);
-        this.sendParty(name === "party_invite" ? PARTY_SUB.INVITE : PARTY_SUB.REQUEST, partyPayload(p.uid), `${name === "party_invite" ? "MỜI" : "XIN VÀO ĐỘI của"} ${p.name} (uid ${p.uid})`);
-        this.partyStatus = name === "party_invite" ? `Đã mời ${p.name}, đang chờ…` : `Đã xin vào đội của ${p.name}, đang chờ…`;
+        this.sendParty(name === "party_invite" ? PARTY_SUB.INVITE : PARTY_SUB.REQUEST, partyPayload(p.uid), `${name === "party_invite" ? "MỜI" : "XIN VÀO ĐỘI của"} ${p.name || p.uid} (uid ${p.uid})`);
+        this.partyStatus = name === "party_invite" ? `Đã mời ${p.name || p.uid}, đang chờ…` : `Đã xin vào đội của ${p.name || p.uid}, đang chờ…`;
         this.publishParty();
         return { ok: true };
       }
@@ -3382,7 +3400,7 @@ class TsOnlineSession implements CodecSession {
     const channels = this.buildMapChannels(map, this.location.channel);
     this.location = { ...this.location, map, x, y, channels };
     // f[18] = hệ (1 Địa, 2 Thủy, 3 Hỏa, 4 Phong), u32@20 = level
-    this.player = { ...this.player, name: f.toString("latin1", 54, 54 + f[53]!), level: f.readUInt32LE(20), element: ELEMENTS[f[18]!] };
+    this.player = { ...this.player, name: f.toString("latin1", 54, 54 + f[53]!), level: f.readUInt32LE(20), element: ELEMENTS[f[18]!], uid: this.selfHex };
     this.io.log("info", `nhân vật: ${this.player.name}, map ${this.location.map}, Kênh ${this.location.channel + 1}`);
     this.io.patchState({ player: this.player, location: this.location });
     this.playerSpawn(f);
@@ -3397,6 +3415,8 @@ class TsOnlineSession implements CodecSession {
       this.onLogin = (uid) => {
         if (uid.length < 8 || uid.every((b) => b === 0)) return reject(new LoginRejectedError("Server từ chối đăng nhập (UID rỗng): sai user/mật khẩu (phân biệt hoa/thường) hoặc phiên cũ chưa được giải phóng"));
         this.uid = Buffer.from(uid);
+        this.player = { ...this.player, uid: this.selfHex };
+        this.io.patchState({ player: this.player });
         setTimeout(() => { this.scanArmed = true; }, 5000);
         this.io.log("info", `login OK, UID ${uid.toString("hex")}`);
         let at = 0;
@@ -5905,11 +5925,21 @@ class TsOnlineSession implements CodecSession {
           this.triggerAutoSweep();
           this.triggerAutoHeal();
           // Thành viên trong tổ đội TUYỆT ĐỐI không tự ý di chuyển hay truy kích quái sau trận
-          if (!this.isMemberInParty() && this.partyTargetConfig.role !== "member") {
+          // ĐẶC BIỆT: Nếu là Chủ PT và đang bật tính năng tự chạy khi chưa đủ tổ đội (escapeIfNotFullParty)
+          // mà hiện tại tổ đội ĐANG CHƯA ĐỦ THÀNH VIÊN THEO CẤU HÌNH ⇒ TẠM DỪNG truy kích quái và di chuyển!
+          // Đứng yên để thành viên kịp thời vào lại đội, tránh việc cứ 700ms lại đâm đầu vào quái mới làm kẹt vòng lặp bỏ chạy!
+          const snap = this.party.snapshot(this.selfHex);
+          const isLeaderRole = this.partyTargetConfig.role === "leader";
+          const isFullParty = snap.joined && snap.members.filter((m) => m.name).length >= (this.partyTargetConfig.members.length + 1);
+          const shouldPauseChaseForParty = isLeaderRole && this.partyTargetConfig.escapeIfNotFullParty && !isFullParty;
+
+          if (!this.isMemberInParty() && this.partyTargetConfig.role !== "member" && !shouldPauseChaseForParty) {
             this.scheduleChaseCheck(700);
             if (this.autoMove.enabled && this.location.map === this.autoMove.mapId) {
               this.scheduleAutoMove(1000);
             }
+          } else if (shouldPauseChaseForParty) {
+            this.io.log("info", "🤝 [Đội ngũ] Đang chờ thành viên vào lại đội ngũ đầy đủ — tạm dừng truy kích quái để ổn định tổ đội.");
           }
         }, 500);
       }

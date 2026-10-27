@@ -327,4 +327,45 @@ describe("PartyService", () => {
     expect(calls3).toHaveLength(2);
     expect(calls3[1]!.params!.escapeIfNotFullParty).toBe("1");
   });
+
+  it("khi một bên đang trong trận (inBattle): không mời vô ích, mời lại ngay khi vừa hết trận", async () => {
+    const { store, conns, svc, tick } = await setup();
+    const leader = new FakeConn("Chu", 12001);
+    const lien = new FakeConn("Lien", 12001);
+    conns.set("chu", leader); conns.set("lien", lien);
+    store.set("chu", { enabled: true, role: "leader", members: [{ name: "Lien", advisor: false }] });
+
+    // Đang trong trận: inBattle = true
+    leader.inBattle = true;
+    await tick();
+    // Chưa gửi mời vì đang trong trận
+    expect(leader.calls.filter((c) => c.action === "party_invite")).toHaveLength(0);
+    expect(svc.planFor("chu")!.entries[0]!.detail).toContain("trận");
+
+    // Hết trận: inBattle = false ⇒ mời ngay
+    leader.inBattle = false;
+    await tick();
+    expect(leader.calls.filter((c) => c.action === "party_invite")).toHaveLength(1);
+  });
+
+  it("reconnect: refresh() xóa sạch cooldown giữa chủ PT và member để mời lại tức thì", async () => {
+    const { store, conns, svc, tick } = await setup();
+    const leader = new FakeConn("Chu", 12001);
+    const lien = new FakeConn("Lien", 12001);
+    conns.set("chu", leader); conns.set("lien", lien);
+    store.set("chu", { enabled: true, role: "leader", members: [{ name: "Lien", advisor: false }] });
+
+    await tick();
+    expect(leader.calls.filter((c) => c.action === "party_invite")).toHaveLength(1);
+
+    // Chưa hết cooldown thì chưa mời lại
+    await tick();
+    expect(leader.calls.filter((c) => c.action === "party_invite")).toHaveLength(1);
+
+    // Member reconnect ⇒ gọi refresh
+    svc.refresh("lien");
+    // Cooldown bị xoá ⇒ gửi mời lại ngay
+    await tick();
+    expect(leader.calls.filter((c) => c.action === "party_invite")).toHaveLength(2);
+  });
 });

@@ -89,6 +89,15 @@ export class PartyService {
   refresh(accountId: string) {
     const r = this.rt.get(canon(accountId));
     if (r) { r.lastConfigHash = ""; r.lastSend.clear(); r.sendCount.clear(); r.lastProbe.clear(); r.firstSeen = Date.now(); }
+    // Đồng thời xoá cooldown đối với tài khoản này trong tất cả các runtime khác (để chủ PT mời lại ngay lập tức)
+    const myName = this.host.entries().find(([id]) => canon(id) === canon(accountId))?.[1]?.character()?.player.name;
+    if (myName) {
+      for (const rt of this.rt.values()) {
+        rt.sendCount.delete(myName);
+        rt.lastSend.delete(myName);
+        rt.lastProbe.delete(myName);
+      }
+    }
     void this.tick();
   }
 
@@ -143,8 +152,11 @@ export class PartyService {
     conn.log(level, `🤝 [Lập đội] ${msg}`, "game");
   }
 
-  /** Giãn cách mời/xin lại cho 1 đối tượng: 25s, 50s, 100s, … tối đa 5 phút theo số lần đã gửi mà chưa vào đội. */
-  private cooldown(rt: Runtime, key: string): number {
+  /** Giãn cách mời/xin lại cho 1 đối tượng: 25s, 50s, 100s, … tối đa 5 phút. Nếu cùng map và cùng online trên web bot thì chỉ 3s! */
+  private cooldown(rt: Runtime, key: string, isSameMap = false): number {
+    if (isSameMap) {
+      return 3_000;
+    }
     return Math.min(INVITE_COOLDOWN_MS * 2 ** Math.max(0, (rt.sendCount.get(key) ?? 0) - 1), INVITE_COOLDOWN_MAX_MS);
   }
 
@@ -212,28 +224,32 @@ export class PartyService {
       leaderName: string;
       members: string[];
       escapeIfNotFullParty: boolean;
+      leaderUid?: string;
+      requestUids?: string[];
     }
   ) {
     const hash = JSON.stringify(auto);
     if (rt.lastConfigHash === hash) return;
-    const r = await conn.dispatch(
-      "set_party_config",
-      {
-        inviteFrom: auto.inviteFrom,
-        requestFromJson: JSON.stringify(auto.requestFrom),
-        role: auto.role,
-        leaderName: auto.leaderName,
-        membersJson: JSON.stringify(auto.members),
-        escapeIfNotFullParty: auto.escapeIfNotFullParty ? "1" : "0",
-      },
-      { quiet: true }
-    );
+    const params: Record<string, string> = {
+      inviteFrom: auto.inviteFrom,
+      requestFromJson: JSON.stringify(auto.requestFrom),
+      role: auto.role,
+      leaderName: auto.leaderName,
+      membersJson: JSON.stringify(auto.members),
+      escapeIfNotFullParty: auto.escapeIfNotFullParty ? "1" : "0",
+    };
+    if (auto.leaderUid) params.leaderUid = auto.leaderUid;
+    if (auto.requestUids && auto.requestUids.length > 0) params.requestUidsJson = JSON.stringify(auto.requestUids);
+    const r = await conn.dispatch("set_party_config", params, { quiet: true });
     if (r.ok) rt.lastConfigHash = hash;
   }
 
   private async tickLeader(accountId: string, conn: GameConnection, cfg: PartyConfig, rt: Runtime, now: number) {
     const ch = conn.character()!;
     const names = cfg.members.map((m) => m.name).filter(Boolean);
+    const selfUid = ch.player?.uid || "";
+    const memberUids = cfg.members.map((m) => this.byName(m.name)?.conn.character()?.player?.uid).filter(Boolean) as string[];
+
     conn.partyGate = (reason, signal) => this.gather(accountId, reason, signal);
     await this.pushEngineConfig(conn, rt, {
       inviteFrom: "",
@@ -242,11 +258,15 @@ export class PartyService {
       leaderName: "",
       members: names,
       escapeIfNotFullParty: !!cfg.escapeIfNotFullParty,
+      leaderUid: selfUid,
+      requestUids: memberUids,
     });
 
     const party = ch.party;
     const inParty = (name: string) => party.joined && party.members.find((m) => m.name && norm(m.name) === norm(name));
     const entries: PartyPlanEntry[] = [];
+    const leaderInBattle = !!ch.inBattle;
+
     for (const m of cfg.members) {
       const peer = this.byName(m.name);
       if (peer && (this.host.isWorldBossRunning?.(peer.id) || this.host.isDungeonSoloRunning?.(peer.id))) {
@@ -266,26 +286,38 @@ export class PartyService {
         status = slot.isAdvisor ? "advisor" : m.advisor ? "advisor_pending" : "in_party";
         if (m.advisor && !slot.isAdvisor) {
           const last = rt.lastAdvisor.get(m.name) ?? 0;
-          if (now - last >= ADVISOR_COOLDOWN_MS) {
+          if (now - last >= ADVISOR_COOLDOWN_MS && !leaderInBattle) {
             rt.lastAdvisor.set(m.name, now);
             const r = await conn.dispatch("party_set_advisor", { slot: m.name }, { quiet: true });
             detail = r.ok ? "Đã gửi lệnh gán QSư, chờ server xác nhận" : r.message;
             if (!r.ok) this.note(conn, rt, `adv:${m.name}`, "warn", `Chưa gán được QSư cho ${m.name}: ${r.message}`);
-          } else detail = "Chưa gán được QSư (xem log)";
+          } else detail = leaderInBattle ? "Đang trong trận đấu" : "Chưa gán được QSư (xem log)";
         }
       } else {
+        const peerInBattle = !!peer?.conn.character()?.inBattle;
         const probeKey = m.name;
+        const isSame = this.sameMap(conn, m.name);
         const lastSend = rt.lastSend.get(probeKey) ?? 0;
         const lastProbe = rt.lastProbe.get(probeKey) ?? 0;
-        if (now - lastSend < this.cooldown(rt, probeKey)) {
+
+        if (leaderInBattle || peerInBattle) {
+          // Một trong hai bên đang trong trận đấu ⇒ server game TS Online sẽ bỏ qua lời mời
+          // Chờ cả hai bên cùng ngoài trận mới mời, xóa lastSend để mời ngay khi hết trận!
+          status = "not_in_map";
+          detail = leaderInBattle ? "Chủ PT đang trong trận, chờ hết trận…" : `${m.name} đang trong trận, chờ hết trận…`;
+          rt.lastSend.delete(probeKey);
+        } else if (now - lastSend < this.cooldown(rt, probeKey, isSame)) {
           status = "inviting";
           detail = "Đã mời, chờ đối phương đồng ý";
-        } else if (now - lastProbe >= PROBE_COOLDOWN_MS) {
+        } else if (now - lastProbe >= (isSame ? 2_000 : PROBE_COOLDOWN_MS)) {
           rt.lastProbe.set(probeKey, now);
-          let r = await conn.dispatch("party_invite", { name: m.name }, { quiet: true });
-          if (!r.ok && /Không thấy/.test(r.message ?? "") && this.sameMap(conn, m.name)) {
-            // Server không báo lại vị trí người từng cùng đội sau teleport ⇒ mời theo uid đã biết (xem PartyTracker.findAny)
-            r = await conn.dispatch("party_invite", { name: m.name, force: "1" }, { quiet: true });
+          const peerUid = peer?.conn.character()?.player?.uid;
+          const inviteParams: Record<string, string> = { name: m.name };
+          if (peerUid) inviteParams.uid = peerUid;
+          let r = await conn.dispatch("party_invite", inviteParams, { quiet: true });
+          if (!r.ok && /Không thấy/.test(r.message ?? "") && isSame) {
+            // Server không báo lại vị trí người từng cùng đội sau teleport/reconnect ⇒ mời kèm force và uid đã biết
+            r = await conn.dispatch("party_invite", { ...inviteParams, force: "1" }, { quiet: true });
           }
           if (r.ok) {
             rt.lastSend.set(probeKey, now);
@@ -295,7 +327,7 @@ export class PartyService {
             this.note(conn, rt, `inv:${m.name}`, "info", `Đã mời ${m.name} vào đội`);
           } else {
             status = /Không thấy/.test(r.message ?? "") ? "not_in_map" : "error";
-            detail = status === "not_in_map" && this.sameMap(conn, m.name) ? CHANNEL_HINT : r.message;
+            detail = status === "not_in_map" && isSame ? CHANNEL_HINT : r.message;
             if (detail === CHANNEL_HINT) this.note(conn, rt, `ch:${m.name}`, "warn", `${m.name}: ${CHANNEL_HINT}`);
           }
         } else {
@@ -318,6 +350,10 @@ export class PartyService {
 
   private async tickMember(accountId: string, conn: GameConnection, cfg: PartyConfig, rt: Runtime, now: number) {
     const ch = conn.character()!;
+    const leader = cfg.leaderName;
+    const leaderPeer = this.byName(leader);
+    const leaderUid = leaderPeer?.conn.character()?.player?.uid ?? "";
+
     conn.partyGate = undefined;
     await this.pushEngineConfig(conn, rt, {
       inviteFrom: cfg.leaderName,
@@ -326,9 +362,9 @@ export class PartyService {
       leaderName: cfg.leaderName,
       members: [],
       escapeIfNotFullParty: !!cfg.escapeIfNotFullParty,
+      leaderUid,
     });
     const party = ch.party;
-    const leader = cfg.leaderName;
     let status: PartyEntryStatus;
     let detail: string | undefined;
     if (!leader) {
@@ -342,7 +378,6 @@ export class PartyService {
       status = "error";
       detail = `Đang ở đội của "${party.leaderName}" — hãy rời đội trước`;
     } else {
-      const leaderPeer = this.byName(leader);
       if (leaderPeer && (this.host.isWorldBossRunning?.(leaderPeer.id) || this.host.isDungeonSoloRunning?.(leaderPeer.id))) {
         status = "not_in_map";
         detail = `Chủ PT đang bận ${this.host.isWorldBossRunning?.(leaderPeer.id) ? "Boss Thế Giới" : "Phó bản đơn"}`;
@@ -350,19 +385,32 @@ export class PartyService {
         this.setPlan(accountId, rt, { enabled: true, role: "member", leaderName: leader, complete: false, entries, selfStatus: status, message: detail }, cfg);
         return;
       }
+
+      const selfInBattle = !!ch.inBattle;
+      const leaderInBattle = !!leaderPeer?.conn.character()?.inBattle;
+      const isSame = this.sameMap(conn, leader);
       const lastSend = rt.lastSend.get(leader) ?? 0;
       const lastProbe = rt.lastProbe.get(leader) ?? 0;
-      if (now - rt.firstSeen < MEMBER_REQUEST_DELAY_MS) {
+
+      if (selfInBattle || leaderInBattle) {
+        // Một trong hai bên đang trong trận đấu ⇒ chờ ra ngoài trận mới xin vào đội
+        status = "not_in_map";
+        detail = selfInBattle ? "Đang trong trận đấu, chờ hết trận…" : `Chủ PT ${leader} đang trong trận, chờ hết trận…`;
+        rt.lastSend.delete(leader);
+      } else if (now - rt.firstSeen < (isSame ? 2_000 : MEMBER_REQUEST_DELAY_MS)) {
         status = "not_in_map";
         detail = "Chờ chủ PT mời trước…";
-      } else if (now - lastSend < this.cooldown(rt, leader)) {
+      } else if (now - lastSend < this.cooldown(rt, leader, isSame)) {
         status = "requesting";
         detail = "Đã xin vào đội, chờ chủ PT đồng ý";
-      } else if (now - lastProbe >= PROBE_COOLDOWN_MS) {
+      } else if (now - lastProbe >= (isSame ? 2_000 : PROBE_COOLDOWN_MS)) {
         rt.lastProbe.set(leader, now);
-        let r = await conn.dispatch("party_request", { name: leader }, { quiet: true });
-        if (!r.ok && /Không thấy/.test(r.message ?? "") && this.sameMap(conn, leader)) {
-          r = await conn.dispatch("party_request", { name: leader, force: "1" }, { quiet: true });
+        const reqLeaderUid = leaderPeer?.conn.character()?.player?.uid;
+        const reqLeaderParams: Record<string, string> = { name: leader };
+        if (reqLeaderUid) reqLeaderParams.uid = reqLeaderUid;
+        let r = await conn.dispatch("party_request", reqLeaderParams, { quiet: true });
+        if (!r.ok && /Không thấy/.test(r.message ?? "") && isSame) {
+          r = await conn.dispatch("party_request", { ...reqLeaderParams, force: "1" }, { quiet: true });
         }
         if (r.ok) {
           rt.lastSend.set(leader, now);
@@ -372,7 +420,7 @@ export class PartyService {
           this.note(conn, rt, `req:${leader}`, "info", `Đã xin vào đội của ${leader}`);
         } else {
           status = /Không thấy/.test(r.message ?? "") ? "not_in_map" : "error";
-          detail = status === "not_in_map" && this.sameMap(conn, leader) ? CHANNEL_HINT : r.message;
+          detail = status === "not_in_map" && isSame ? CHANNEL_HINT : r.message;
           if (detail === CHANNEL_HINT) this.note(conn, rt, `ch:${leader}`, "warn", `${leader}: ${CHANNEL_HINT}`);
         }
       } else {

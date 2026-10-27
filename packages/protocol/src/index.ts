@@ -100,6 +100,8 @@ export interface UnitState {
   /** EXP hiện tại / mốc lên cấp kế tiếp (số nguyên). Có đủ cả hai thì `exp` = cur/max×100. */
   expCur?: number;
   expMax?: number;
+  /** UID hex 16 ký tự của nhân vật */
+  uid?: string;
 }
 
 export interface PartyMember {

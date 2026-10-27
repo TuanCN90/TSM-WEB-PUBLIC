@@ -220,12 +220,14 @@ const FEATURES: Feature[] = [
       "Khi warp/di chuyển, các tài khoản trong đội đồng bộ theo chủ đội.",
       "Chặn hoàn toàn thành viên tự gửi gói di chuyển (06/01) hoặc tự nhấp đúp quái (14/01) khi đang trong tổ đội, máy chủ sẽ tự kéo thành viên theo chủ PT; ngăn chặn triệt để lỗi server ngắt kết nối đồng loạt (mã 42).",
       "Tự động bỏ chạy khi chưa đủ đội ngũ (Cấu hình chung / Tính năng khác): nếu chủ PT còn thiếu thành viên hoặc thành viên chưa join vào team mà vào trận, cả nhân vật và võ tướng tự động bỏ chạy (Ưu tiên Bậc 2); chỉ khi đủ 100% thành viên có nhập tên mới đánh bình thường. Cơ chế tự động khôi phục cấu hình ngay khi reconnect giúp tính năng luôn luôn làm việc ổn định mà không cần thao tác bật/tắt lại.",
+      "Cơ chế tự phục hồi tổ đội tại bãi train: Khi thiếu thành viên, chủ PT tự động tạm dừng truy kích quái (chase) sau khi bỏ chạy để đứng yên chờ thành viên vào lại đội. Đồng bộ UID trực tiếp giữa chủ PT và thành viên cho phép chấp nhận lời mời ngay lập tức khi vừa reconnect dù chưa nhận gói spawn tên. Tự động nhận diện trạng thái trong trận để xóa cooldown và gửi lại lời mời ngay khi hai bên cùng ra ngoài trận.",
     ],
     rules: [
       "Chỉ ghép các tài khoản của bạn đang online.",
       "Rời đội sẽ rời cả phó bản đang chạy.",
       "Ô thành viên để trống không tính vào danh sách cần chờ.",
       "Tự động khôi phục và đồng bộ lại cấu hình tổ đội & bỏ chạy ngay sau khi kết nối lại (reconnect), đảm bảo tính năng luôn hoạt động liên tục.",
+      "Khi ở bãi quái, nếu bị lệch pha battle hoặc dính quái liên tục, hệ thống sẽ tự động ghép lại đội ngay khi cả hai bên cùng ở ngoài trận mà người dùng không cần di chuyển về map an toàn.",
     ],
   },
   {
